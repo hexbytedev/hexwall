@@ -43,5 +43,16 @@ If neither is found, start fails. Use `--db` to specify the path manually.
 | `--db`       | _(auto-detected)_   | Path to `pihole-FTL.db`                                          |
 | `--guard-db` | `./pihole-guard.db` | Path to the local guard database (created on first run)          |
 | `--mode`     | `watch`             | `watch` — detect and log only; `enforce` — detect, log, and kill |
+| `--debug`    | `false`             | Enable verbose per-connection scan logging                       |
 
 `--mode` accepts `watch` or `enforce` (case-insensitive). Any other value exits with an error.
+
+### Debug logging
+
+When `--debug` is enabled, each scan cycle logs every connection it encounters with its status:
+
+- **allowed** — IP is in the local trust cache or allowlist
+- **unrecognized-clean** — IP is not in cache, but the fraud API returned a clean verdict (or 403 for private/reserved ranges)
+- **vulnerable** — IP is not in cache, fraud API flagged it as abuser/attacker/threat
+
+When debug is disabled (default), only non-allowed results are logged. Additionally, empty scans (somo returning zero connections) are always logged regardless of debug mode.

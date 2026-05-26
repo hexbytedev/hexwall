@@ -1,6 +1,6 @@
 # pihole-guard
 
-Monitors active network connections and kills any that connect to IPs not previously seen through Pi-hole's DNS resolver — closing the gap that Pi-hole leaves open for direct-IP connections.
+Monitors active network connections and kills any that connect to IPs that are not trusted by Pi-hole history, the built-in local allowlist, or recent already-established traffic — closing the gap that Pi-hole leaves open for direct-IP connections.
 
 ---
 
@@ -8,8 +8,7 @@ Monitors active network connections and kills any that connect to IPs not previo
 
 Pi-hole operates at the DNS layer. It can block a domain, but it has no visibility into connections that bypass DNS entirely — processes that dial a hard-coded IP address directly. Malware and compromised packages commonly use this technique to phone home without triggering any DNS-based block.
 
-pihole-guard works from the inverse assumption: **if an IP was never resolved through Pi-hole, the connection is suspicious by default.** Every 30 seconds it reads Pi-hole's own query history, resolves those domains forward, and builds a local allow-set of trusted IPs. Anything that falls outside that set is checked against an external fraud API. Confirmed threats are either logged (watch mode) or killed (enforce mode).
-
+pihole-guard works from the inverse assumption: **if an IP is not trusted, the connection is suspicious by default.** Trust is granted when the IP matches the built-in CIDR allowlist, was refreshed from Pi-hole query history within the last hour, or was already observed as an established connection within the last 60 seconds. On startup it immediately refreshes trusted IPs from Pi-hole, then refreshes them every 30 seconds while scanning connections every 10 seconds. Anything that falls outside that trust set is checked against an external fraud API. Confirmed threats are either logged (watch mode) or killed (enforce mode).
 
 ---
 

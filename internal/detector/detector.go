@@ -4,6 +4,7 @@ package detector
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,8 +24,10 @@ const (
 // Returns an error if neither is found.
 func FindDBPath() (string, error) {
 	// Check the default host installation first.
-	if _, err := os.Stat(physicalDBPath); err == nil {
+	if err := validateDBFile(physicalDBPath); err == nil {
 		return physicalDBPath, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("failed to access physical pi-hole DB at %s: %w", physicalDBPath, err)
 	}
 
 	// Fall back to a running Docker installation.
@@ -66,8 +69,8 @@ func findDockerDBPath() (string, error) {
 	for _, m := range mounts {
 		if m.Destination == "/etc/pihole" {
 			dbPath := filepath.Join(m.Source, ftlDBFilename)
-			if _, err := os.Stat(dbPath); err != nil {
-				return "", fmt.Errorf("pi-hole container found but DB not at expected path %s: %w", dbPath, err)
+			if err := validateDBFile(dbPath); err != nil {
+				return "", fmt.Errorf("pi-hole container found but DB not available at expected path %s: %w", dbPath, err)
 			}
 
 			return dbPath, nil
@@ -96,11 +99,26 @@ func findPiholeContainer() (string, error) {
 		}
 
 		id, name, image := parts[0], parts[1], parts[2]
-		if strings.Contains(strings.ToLower(name), "pihole") ||
-			strings.Contains(strings.ToLower(image), "pihole") {
+		name = strings.ToLower(name)
+		image = strings.ToLower(image)
+
+		if strings.Contains(name, "pihole") || strings.Contains(image, "pihole") {
 			return id, nil
 		}
 	}
 
 	return "", fmt.Errorf("no running pi-hole container found")
+}
+
+func validateDBFile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("path is not a regular file")
+	}
+
+	return nil
 }

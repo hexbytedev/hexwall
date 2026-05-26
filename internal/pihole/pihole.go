@@ -6,7 +6,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -22,13 +24,24 @@ type Checker struct {
 	db *sql.DB
 }
 
+const domainLookback = time.Hour
+
 // NewChecker opens a read-only Checker for the configured Pi-hole database.
 func NewChecker(config *Config) (*Checker, error) {
+	if config == nil {
+		return nil, errors.New("missing pihole config")
+	}
+
+	if strings.TrimSpace(config.DBPath) == "" {
+		return nil, errors.New("missing pihole database path")
+	}
+
 	// Check file access first so SQLite does not hide permission problems behind a generic error.
-	if _, err := os.Open(config.DBPath); err != nil {
+	file, err := os.Open(config.DBPath)
+	if err != nil {
 		if errors.Is(err, os.ErrPermission) {
 			return nil, fmt.Errorf(
-				"permission denied reading %s — try running with sudo or: sudo chmod o+r %s",
+				"permission denied reading %s; try running with sudo or: sudo chmod o+r %s",
 				config.DBPath, config.DBPath,
 			)
 		}
@@ -38,8 +51,12 @@ func NewChecker(config *Config) (*Checker, error) {
 		}
 		return nil, fmt.Errorf("cannot access %s: %w", config.DBPath, err)
 	}
+	if err := file.Close(); err != nil {
+		return nil, fmt.Errorf("close access check for %s: %w", config.DBPath, err)
+	}
 
-	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro", config.DBPath))
+	dsn := (&url.URL{Scheme: "file", Path: config.DBPath, RawQuery: "mode=ro"}).String()
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open pihole-db: %w", err)
 	}
@@ -62,22 +79,42 @@ func (c *Checker) Close() error {
 // IsDomainKnown reports whether domain appeared in Pi-hole query history within the last hour.
 // Domains missing from that history bypassed Pi-hole DNS resolution and are treated as suspicious.
 func (c *Checker) IsDomainKnown(domain string) (bool, error) {
-	cutoff := time.Now().Add(-60 * time.Minute).Unix()
+	domain = normalizeDomain(domain)
+	if domain == "" {
+		return false, nil
+	}
 
-	query := `SELECT COUNT(*) FROM queries WHERE domain = ? AND timestamp >= ?`
+	cutoff := time.Now().Add(-domainLookback).Unix()
 
-	var count int
-	err := c.db.QueryRow(query, domain, cutoff).Scan(&count)
+	var found int
+	err := c.db.QueryRow(`
+		SELECT 1
+		FROM queries
+		WHERE timestamp >= ?
+		  AND TRIM(domain) <> ''
+		  AND domain = ? COLLATE NOCASE
+		LIMIT 1
+	`, cutoff, domain).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
 		return false, fmt.Errorf("database query failed: %w", err)
 	}
 
-	return count > 0, nil
+	return true, nil
 }
 
 // DomainsSeenSince returns the distinct domains Pi-hole recorded since the given Unix timestamp.
 func (c *Checker) DomainsSeenSince(since int64) ([]string, error) {
-	rows, err := c.db.Query(`SELECT DISTINCT domain FROM queries WHERE timestamp >= ?`, since)
+	rows, err := c.db.Query(`
+		SELECT DISTINCT LOWER(TRIM(domain))
+		FROM queries
+		WHERE timestamp >= ?
+		  AND domain IS NOT NULL
+		  AND TRIM(domain) <> ''
+		ORDER BY LOWER(TRIM(domain))
+	`, since)
 	if err != nil {
 		return nil, fmt.Errorf("database query failed: %w", err)
 	}
@@ -89,8 +126,21 @@ func (c *Checker) DomainsSeenSince(since int64) ([]string, error) {
 		if err := rows.Scan(&domain); err != nil {
 			return nil, fmt.Errorf("scan failed: %w", err)
 		}
+
+		// The query already canonicalizes domains, but keep the append guard local.
+		if domain == "" {
+			continue
+		}
 		domains = append(domains, domain)
 	}
 
-	return domains, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration failed: %w", err)
+	}
+
+	return domains, nil
+}
+
+func normalizeDomain(domain string) string {
+	return strings.ToLower(strings.TrimSpace(domain))
 }

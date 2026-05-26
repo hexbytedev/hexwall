@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -56,13 +58,31 @@ func (c *Client) CheckIP(ctx context.Context, ip string) (*IPReport, error) {
 	if c == nil {
 		return nil, errors.New("nil deghost client")
 	}
+	if c.httpClient == nil {
+		return nil, errors.New("nil deghost http client")
+	}
 
-	if strings.TrimSpace(ip) == "" {
+	baseURL := strings.TrimSpace(c.baseURL)
+	if baseURL == "" {
+		return nil, errors.New("deghost base URL is required")
+	}
+
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
 		return nil, errors.New("ip is required")
 	}
 
-	url := c.baseURL + "/ip/" + ip
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	parsedIP, err := netip.ParseAddr(ip)
+	if err != nil {
+		return nil, fmt.Errorf("invalid ip %q: %w", ip, err)
+	}
+
+	endpoint, err := url.JoinPath(baseURL, "ip", parsedIP.String())
+	if err != nil {
+		return nil, fmt.Errorf("build endpoint: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -71,14 +91,16 @@ func (c *Client) CheckIP(ctx context.Context, ip string) (*IPReport, error) {
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode == http.StatusForbidden {
 		return nil, nil
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("deghost returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("deghost returned status %d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
 	}
 
 	var report IPReport

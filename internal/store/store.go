@@ -7,9 +7,16 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	_ "modernc.org/sqlite"
+)
+
+const (
+	refreshTrustWindow     = time.Hour
+	establishedTrustWindow = time.Minute
+	sqliteBusyTimeout      = 5 * time.Second
 )
 
 const schema = `
@@ -38,12 +45,12 @@ type Store struct {
 
 // NewStore opens or creates the guard database at dbPath and applies the schema.
 func NewStore(dbPath string) (*Store, error) {
-	readWrite, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=rwc", dbPath))
+	readWrite, err := sql.Open("sqlite", sqliteDSN(dbPath, "rwc"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open guard db: %w", err)
 	}
 
-	if err := configureConnection(readWrite); err != nil {
+	if err := configureConnection(readWrite, false); err != nil {
 		readWrite.Close()
 		return nil, fmt.Errorf("failed to connect to guard db: %w", err)
 	}
@@ -53,13 +60,13 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("failed to apply schema: %w", err)
 	}
 
-	readOnly, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro", dbPath))
+	readOnly, err := sql.Open("sqlite", sqliteDSN(dbPath, "ro"))
 	if err != nil {
 		readWrite.Close()
 		return nil, fmt.Errorf("failed to open guard db read-only connection: %w", err)
 	}
 
-	if err := configureConnection(readOnly); err != nil {
+	if err := configureConnection(readOnly, true); err != nil {
 		readOnly.Close()
 		readWrite.Close()
 		return nil, fmt.Errorf("failed to connect to guard db read-only connection: %w", err)
@@ -68,19 +75,31 @@ func NewStore(dbPath string) (*Store, error) {
 	return &Store{readWrite: readWrite, readOnly: readOnly}, nil
 }
 
-func configureConnection(db *sql.DB) error {
+func sqliteDSN(dbPath, mode string) string {
+	query := url.Values{}
+	query.Set("mode", mode)
+
+	return (&url.URL{Scheme: "file", Path: dbPath, RawQuery: query.Encode()}).String()
+}
+
+func configureConnection(db *sql.DB, readOnly bool) error {
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
 	if err := db.Ping(); err != nil {
-		return err
+		return fmt.Errorf("ping db: %w", err)
 	}
 
-	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA busy_timeout=%d;`, sqliteBusyTimeout/time.Millisecond)); err != nil {
+		return fmt.Errorf("set busy_timeout: %w", err)
+	}
+
+	if readOnly {
+		return nil
+	}
 
 	if _, err := db.Exec(`PRAGMA journal_mode=WAL;`); err != nil {
 		return fmt.Errorf("set journal_mode WAL: %w", err)
-	}
-
-	if _, err := db.Exec(`PRAGMA busy_timeout=5000;`); err != nil {
-		return fmt.Errorf("set busy_timeout: %w", err)
 	}
 
 	return nil
@@ -88,6 +107,10 @@ func configureConnection(db *sql.DB) error {
 
 // Close closes both database connections.
 func (s *Store) Close() error {
+	if s == nil {
+		return nil
+	}
+
 	var errReadWrite error
 	var errReadOnly error
 
@@ -143,9 +166,9 @@ func (s *Store) UpdateEstablished(ip string) error {
 //   - somo confirmed it as an active established connection within the last 60 seconds
 //     (keeps long-running connections alive even after their domain ages out)
 func (s *Store) IsAllowed(ip string) (bool, error) {
-	now := time.Now().Unix()
-	refreshCutoff := now - 3600   // 1 hour
-	establishedCutoff := now - 60 // 60 seconds
+	now := time.Now()
+	refreshCutoff := now.Add(-refreshTrustWindow).Unix()
+	establishedCutoff := now.Add(-establishedTrustWindow).Unix()
 
 	var found int
 	err := s.readOnly.QueryRow(`
@@ -156,7 +179,7 @@ func (s *Store) IsAllowed(ip string) (bool, error) {
 		LIMIT 1
 	`, ip, refreshCutoff, establishedCutoff).Scan(&found)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 

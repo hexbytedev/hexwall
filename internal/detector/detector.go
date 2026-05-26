@@ -1,6 +1,5 @@
-// Package detector handles auto-discovery of the Pi-hole FTL database path.
-// It checks for a physical (bare-metal) installation first, then falls back
-// to a Docker-based installation.
+// Package detector locates the Pi-hole FTL database on the host.
+// It checks the default bare-metal path first, then falls back to a running Docker-based installation.
 package detector
 
 import (
@@ -17,18 +16,18 @@ const (
 	ftlDBFilename  = "pihole-FTL.db"
 )
 
-// FindDBPath returns the path to pihole-FTL.db by checking:
-//  1. Physical installation at /etc/pihole/pihole-FTL.db
-//  2. Docker container with "pihole" in the name or image
+// FindDBPath returns the Pi-hole FTL database path from the default host install or a running Docker container.
+//   - Physical installation at /etc/pihole/pihole-FTL.db
+//   - Docker container with "pihole" in the name or image
 //
 // Returns an error if neither is found.
 func FindDBPath() (string, error) {
-	// 1. Physical installation
+	// Check the default host installation first.
 	if _, err := os.Stat(physicalDBPath); err == nil {
 		return physicalDBPath, nil
 	}
 
-	// 2. Docker installation
+	// Fall back to a running Docker installation.
 	path, err := findDockerDBPath()
 	if err != nil {
 		return "", fmt.Errorf(
@@ -47,13 +46,13 @@ type dockerMount struct {
 }
 
 func findDockerDBPath() (string, error) {
-	// Find running Pi-hole containers by name or image
+	// Find a running Pi-hole container by name or image.
 	containerID, err := findPiholeContainer()
 	if err != nil {
 		return "", err
 	}
 
-	// Inspect the container to find where /etc/pihole is mounted on the host
+	// Inspect the container to find where /etc/pihole is mounted on the host.
 	out, err := exec.Command("docker", "inspect", "--format", "{{json .Mounts}}", containerID).Output()
 	if err != nil {
 		return "", fmt.Errorf("docker inspect failed for container %s: %w", containerID, err)

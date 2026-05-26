@@ -10,8 +10,8 @@ import (
 	"github.com/hexbytedev/pihole-guard/internal/store"
 )
 
-// IPCache resolves Pi-hole's known domains to IPs and writes them to the store.
-// The store owns the allowed-IP set; this type only drives the refresh cycle.
+// IPCache resolves Pi-hole domains to IPs and writes them to the store.
+// The store owns the trusted-IP set, and this type only drives the refresh cycle.
 type IPCache struct {
 	checker *Checker
 	store   *store.Store
@@ -25,8 +25,7 @@ func NewIPCache(checker *Checker, store *store.Store) *IPCache {
 	}
 }
 
-// Refresh queries Pi-hole for all domains seen in the last hour, forward-resolves
-// each domain concurrently, and upserts the resulting IPs into the store.
+// Refresh queries Pi-hole for domains seen in the last hour, resolves them concurrently, and upserts the resulting IPs into the store.
 func (c *IPCache) Refresh(ctx context.Context) {
 	since := time.Now().Add(-60 * time.Minute).Unix()
 
@@ -52,7 +51,7 @@ func (c *IPCache) Refresh(ctx context.Context) {
 
 			ips, err := net.DefaultResolver.LookupHost(rctx, d)
 			if err != nil {
-				// DNS failure is normal (blocked domains, expired records, etc.)
+				// DNS failure is normal for blocked domains, expired records, and similar cases.
 				return
 			}
 			results <- result{domain: d, ips: ips}

@@ -1,5 +1,5 @@
-// Package monitor checks active network connections against the guard store
-// and kills any that are not trusted.
+// Package monitor scans active network connections against the guard store.
+// It logs or kills untrusted connections based on the selected mode.
 package monitor
 
 import (
@@ -17,7 +17,9 @@ import (
 )
 
 const (
+	// ModeWatch logs suspicious connections without killing them.
 	ModeWatch   = "watch"
+	// ModeEnforce kills suspicious connections and records the action.
 	ModeEnforce = "enforce"
 )
 
@@ -29,8 +31,7 @@ func logScanConnection(debug bool, ip, program, status string) {
 	slog.Info("scan connection", "ip", ip, "program", program, "status", status)
 }
 
-// RunScan inspects established connections and applies detection/kill logic
-// based on the selected mode.
+// RunScan inspects established connections and applies the selected trust and kill policy.
 func RunScan(ctx context.Context, guardStore *store.Store, deghostClient *deghost.Client, mode string, debug bool) {
 	fmt.Printf("[%s] Scanning connections (%s mode)...\n", time.Now().Format("15:04:05"), mode)
 
@@ -46,7 +47,7 @@ func RunScan(ctx context.Context, guardStore *store.Store, deghostClient *deghos
 	}
 
 	for _, conn := range connections {
-		// Extract the remote IP, handling both IPv4 and IPv6 formats.
+		// Extract the remote IP from both IPv4 and bracketed IPv6 addresses.
 		addr := strings.Trim(conn.RAddress, "[]")
 		host, _, err := net.SplitHostPort(addr)
 		if err != nil {
@@ -61,7 +62,7 @@ func RunScan(ctx context.Context, guardStore *store.Store, deghostClient *deghos
 
 		ipStr := ip.String()
 
-		// Always trust allowlisted IPs (loopback, private ranges, etc.)
+		// Trust allowlisted IPs immediately.
 		if allowlist.Contains(ip) {
 			logScanConnection(debug, ipStr, conn.Program, "allowed")
 			continue
@@ -75,8 +76,7 @@ func RunScan(ctx context.Context, guardStore *store.Store, deghostClient *deghos
 
 		if allowed {
 			logScanConnection(debug, ipStr, conn.Program, "allowed")
-			// Stamp last_established so long-running connections survive
-			// the Pi-hole 1-hour window.
+			// Keep long-running connections trusted after their Pi-hole refresh window expires.
 			if err := guardStore.UpdateEstablished(ipStr); err != nil {
 				slog.Error("failed to update established", "address", conn.RAddress, "err", err)
 			}

@@ -1,3 +1,4 @@
+// Package main wires together Pi-hole discovery, cache refreshes, and connection monitoring.
 package main
 
 import (
@@ -31,17 +32,17 @@ func main() {
 		return
 	}
 
-	// Cancel everything cleanly on Ctrl+C.
+	// Cancel background work cleanly on Ctrl+C.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// 1. Check if somo is installed.
+	// 1. Verify that somo is available before starting any monitoring.
 	if err := somo.CheckInstalled(); err != nil {
 		slog.Error("somo is not installed", "err", err, "tip", "install somo from https://github.com/theopfr/somo")
 		return
 	}
 
-	// 2. Resolve Pi-hole DB path.
+	// 2. Resolve the Pi-hole database path from --db or auto-detection.
 	resolvedDBPath := *dbPath
 	if resolvedDBPath == "" {
 		detected, err := detector.FindDBPath()
@@ -54,7 +55,7 @@ func main() {
 		slog.Info("pi-hole database auto-detected", "path", resolvedDBPath)
 	}
 
-	// 3. Open Pi-hole DB (read-only).
+	// 3. Open the Pi-hole database in read-only mode.
 	checker, err := pihole.NewChecker(&pihole.Config{DBPath: resolvedDBPath})
 	if err != nil {
 		slog.Error("failed to open pi-hole database", "path", resolvedDBPath, "err", err)
@@ -62,7 +63,7 @@ func main() {
 	}
 	defer checker.Close()
 
-	// 4. Open guard DB (read-write, created if not exists).
+	// 4. Open the local guard database, creating it if needed.
 	guardStore, err := store.NewStore(*guardDB)
 	if err != nil {
 		slog.Error("failed to open guard database", "path", *guardDB, "err", err)
@@ -74,12 +75,11 @@ func main() {
 
 	deghostClient := deghost.NewClient("https://fraudcheckapi.hexbyte.dev", 5*time.Second)
 
-	// 5. Build cache, do initial refresh before starting the monitor so the
-	//    first tick doesn't kill legitimate connections.
+	// 5. Refresh trusted IPs before starting the monitor so the first tick does not kill legitimate connections.
 	cache := pihole.NewIPCache(checker, guardStore)
 	cache.Refresh(ctx)
 
-	// 6. Keep the cache fresh in the background (every 30s).
+	// 6. Keep the trusted-IP cache fresh in the background.
 	go cache.RunRefresh(ctx, 30*time.Second)
 
 	fmt.Println("Starting network monitor...")
@@ -88,7 +88,7 @@ func main() {
 		fmt.Println("> Debug logging is enabled for every scanned connection.")
 	}
 
-	// 7. Monitor connections every 10s.
+	// 7. Scan connections every 10 seconds.
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 

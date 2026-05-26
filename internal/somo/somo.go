@@ -1,4 +1,4 @@
-// Package somo provides functions to interact with the somo CLI tool for monitoring and managing network connections.
+// Package somo wraps the somo CLI for monitoring and managing network connections.
 package somo
 
 import (
@@ -7,7 +7,7 @@ import (
 	"os/exec"
 )
 
-// Connection maps the default JSON output structure of SOMO.
+// Connection matches somo's default JSON output.
 type Connection struct {
 	Protocol    string `json:"proto"`
 	LPort       string `json:"local_port"`
@@ -19,7 +19,7 @@ type Connection struct {
 	AddressType string `json:"address_type"`
 }
 
-// CheckInstalled checks if the somo CLI is in the system PATH.
+// CheckInstalled reports whether the somo CLI is available in PATH.
 func CheckInstalled() error {
 	_, err := exec.LookPath("somo")
 	if err != nil {
@@ -45,7 +45,7 @@ func GetEstablishedConnections() ([]Connection, error) {
 	return result, nil
 }
 
-// KillConnection kills a processing using its PID via somo.
+// KillConnection kills a process by PID via somo.
 func KillConnection(pid string) error {
 	if pid == "-" || pid == "" {
 		return fmt.Errorf("invalid PID: %s", pid)

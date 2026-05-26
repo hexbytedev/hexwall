@@ -1,4 +1,5 @@
-// Package pihole handles all pihole related tasks.
+// Package pihole reads query history from the Pi-hole FTL database.
+// It exposes helpers for checking recent domains and building the trusted-IP cache.
 package pihole
 
 import (
@@ -11,20 +12,19 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Config holds the configuration for the pihole checker.
+// Config holds the Pi-hole database configuration.
 type Config struct {
 	DBPath string
 }
 
-// Checker is responsible for checking if a domain is known based on the pihole query history.
+// Checker reads Pi-hole query history from the FTL database.
 type Checker struct {
 	db *sql.DB
 }
 
-// NewChecker creates a new Checker instance with the given configuration.
+// NewChecker opens a read-only Checker for the configured Pi-hole database.
 func NewChecker(config *Config) (*Checker, error) {
-	// Pre-check: give an actionable error before SQLite gets a chance to emit
-	// a generic "unable to open database file" message.
+	// Check file access first so SQLite does not hide permission problems behind a generic error.
 	if _, err := os.Open(config.DBPath); err != nil {
 		if errors.Is(err, os.ErrPermission) {
 			return nil, fmt.Errorf(
@@ -39,7 +39,6 @@ func NewChecker(config *Config) (*Checker, error) {
 		return nil, fmt.Errorf("cannot access %s: %w", config.DBPath, err)
 	}
 
-	// db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro&immutable=1", config.DBPath))
 	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro", config.DBPath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open pihole-db: %w", err)
@@ -55,14 +54,13 @@ func NewChecker(config *Config) (*Checker, error) {
 	}, nil
 }
 
-// Close closes the database connection.
+// Close closes the Checker database connection.
 func (c *Checker) Close() error {
 	return c.db.Close()
 }
 
-// IsDomainKnown checks if the given domain appeared in Pi-hole's query history
-// in the last 60 minutes. If found, Pi-hole already decided its fate — let it through.
-// If not found, it bypassed DNS entirely and should be treated as suspicious.
+// IsDomainKnown reports whether domain appeared in Pi-hole query history within the last hour.
+// Domains missing from that history bypassed Pi-hole DNS resolution and are treated as suspicious.
 func (c *Checker) IsDomainKnown(domain string) (bool, error) {
 	cutoff := time.Now().Add(-60 * time.Minute).Unix()
 
@@ -77,7 +75,7 @@ func (c *Checker) IsDomainKnown(domain string) (bool, error) {
 	return count > 0, nil
 }
 
-// DomainsSeenSince returns all distinct domains Pi-hole has recorded since the given Unix timestamp.
+// DomainsSeenSince returns the distinct domains Pi-hole recorded since the given Unix timestamp.
 func (c *Checker) DomainsSeenSince(since int64) ([]string, error) {
 	rows, err := c.db.Query(`SELECT DISTINCT domain FROM queries WHERE timestamp >= ?`, since)
 	if err != nil {

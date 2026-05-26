@@ -1,6 +1,6 @@
 // Package store manages the local pihole-guard SQLite database.
-// Unlike the Pi-hole DB (read-only), this DB is owned by the tool
-// and persists approved IPs and kill logs across restarts.
+// Unlike the Pi-hole DB, this database is owned by the tool
+// and persists trusted IPs and kill logs across restarts.
 package store
 
 import (
@@ -30,13 +30,13 @@ CREATE TABLE IF NOT EXISTS killed_connections (
 );
 `
 
-// Store is the local guard database.
+// Store wraps the local guard database.
 type Store struct {
 	readWrite *sql.DB
 	readOnly  *sql.DB
 }
 
-// NewStore opens (or creates) the guard database at dbPath and applies the schema.
+// NewStore opens or creates the guard database at dbPath and applies the schema.
 func NewStore(dbPath string) (*Store, error) {
 	readWrite, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=rwc", dbPath))
 	if err != nil {
@@ -86,7 +86,7 @@ func configureConnection(db *sql.DB) error {
 	return nil
 }
 
-// Close closes the database connection.
+// Close closes both database connections.
 func (s *Store) Close() error {
 	var errReadWrite error
 	var errReadOnly error
@@ -102,8 +102,8 @@ func (s *Store) Close() error {
 	return errors.Join(errReadWrite, errReadOnly)
 }
 
-// UpsertAllowedIP inserts or updates an approved IP. Called during cache refresh.
-// On conflict, updates domain and last_refreshed but preserves first_approved and last_established.
+// UpsertAllowedIP inserts or refreshes a trusted IP.
+// On conflict, it updates the domain and last_refreshed while preserving first_approved and last_established.
 func (s *Store) UpsertAllowedIP(ip, domain string) error {
 	now := time.Now().Unix()
 
@@ -123,7 +123,7 @@ func (s *Store) UpsertAllowedIP(ip, domain string) error {
 }
 
 // UpdateEstablished stamps the current time as last_established for an IP.
-// Called each monitor tick when somo confirms the connection is still active.
+// The monitor calls it when somo confirms the connection is still active.
 func (s *Store) UpdateEstablished(ip string) error {
 	_, err := s.readWrite.Exec(`
 		UPDATE allowed_ips SET last_established = ? WHERE ip = ?
@@ -136,7 +136,9 @@ func (s *Store) UpdateEstablished(ip string) error {
 	return nil
 }
 
-// IsAllowed returns true if the IP is trusted. An IP is trusted when either:
+// IsAllowed reports whether the IP is trusted based on a recent Pi-hole refresh or recent established-connection activity.
+//
+// It returns true if the IP is trusted. An IP is trusted when either:
 //   - It was refreshed from Pi-hole's domain history within the last hour, OR
 //   - somo confirmed it as an active established connection within the last 60 seconds
 //     (keeps long-running connections alive even after their domain ages out)

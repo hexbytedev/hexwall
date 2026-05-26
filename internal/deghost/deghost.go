@@ -1,3 +1,5 @@
+// Package deghost wraps the external fraud API used for IP reputation checks.
+// It converts remote responses into local kill-policy decisions.
 package deghost
 
 import (
@@ -10,7 +12,7 @@ import (
 	"time"
 )
 
-// Client calls the external deghost fraud API.
+// Client calls the external fraud API used for IP reputation checks.
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
@@ -22,7 +24,7 @@ type IPReport struct {
 	Security SecurityReport `json:"security"`
 }
 
-// SecurityReport describes fraud/security signals for an IP.
+// SecurityReport describes fraud and anonymity signals for an IP.
 type SecurityReport struct {
 	IsAbuser        bool `json:"is_abuser"`
 	IsAttacker      bool `json:"is_attacker"`
@@ -37,7 +39,7 @@ type SecurityReport struct {
 	IsThreat        bool `json:"is_threat"`
 }
 
-// NewClient creates a deghost API client.
+// NewClient creates a Client for the given API base URL.
 func NewClient(baseURL string, timeout time.Duration) *Client {
 	trimmed := strings.TrimRight(baseURL, "/")
 	return &Client{
@@ -48,8 +50,8 @@ func NewClient(baseURL string, timeout time.Duration) *Client {
 	}
 }
 
-// CheckIP fetches security data for a single IP.
-// Returns nil report and nil error for HTTP 403 (private/reserved IPs).
+// CheckIP fetches a fraud report for a single IP.
+// It returns a nil report and nil error for HTTP 403 responses, which the API uses for private or reserved IPs.
 func (c *Client) CheckIP(ctx context.Context, ip string) (*IPReport, error) {
 	if c == nil {
 		return nil, errors.New("nil deghost client")
@@ -87,7 +89,7 @@ func (c *Client) CheckIP(ctx context.Context, ip string) (*IPReport, error) {
 	return &report, nil
 }
 
-// ShouldKill applies the kill policy to a deghost report.
+// ShouldKill reports whether the report matches the current kill policy.
 func ShouldKill(report *IPReport) bool {
 	if report == nil {
 		return false

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	// Register the pure-Go SQLite driver used to read the Pi-hole FTL database.
 	_ "modernc.org/sqlite"
 )
 
@@ -62,7 +63,7 @@ func NewChecker(config *Config) (*Checker, error) {
 	}
 
 	if err := db.Ping(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to connect to pihole-db: %w", err)
 	}
 
@@ -118,7 +119,9 @@ func (c *Checker) DomainsSeenSince(since int64) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("database query failed: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var domains []string
 	for rows.Next() {

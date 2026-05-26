@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"time"
 
+	// Register the pure-Go SQLite driver used for the local guard database.
 	_ "modernc.org/sqlite"
 )
 
@@ -51,24 +52,24 @@ func NewStore(dbPath string) (*Store, error) {
 	}
 
 	if err := configureConnection(readWrite, false); err != nil {
-		readWrite.Close()
+		_ = readWrite.Close()
 		return nil, fmt.Errorf("failed to connect to guard db: %w", err)
 	}
 
 	if _, err := readWrite.Exec(schema); err != nil {
-		readWrite.Close()
+		_ = readWrite.Close()
 		return nil, fmt.Errorf("failed to apply schema: %w", err)
 	}
 
 	readOnly, err := sql.Open("sqlite", sqliteDSN(dbPath, "ro"))
 	if err != nil {
-		readWrite.Close()
+		_ = readWrite.Close()
 		return nil, fmt.Errorf("failed to open guard db read-only connection: %w", err)
 	}
 
 	if err := configureConnection(readOnly, true); err != nil {
-		readOnly.Close()
-		readWrite.Close()
+		_ = readOnly.Close()
+		_ = readWrite.Close()
 		return nil, fmt.Errorf("failed to connect to guard db read-only connection: %w", err)
 	}
 

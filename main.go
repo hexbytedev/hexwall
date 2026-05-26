@@ -79,7 +79,11 @@ func run() int {
 		slog.Error("failed to open pi-hole database", "path", resolvedDBPath, "err", err)
 		return 1
 	}
-	defer checker.Close()
+	defer func() {
+		if err := checker.Close(); err != nil {
+			slog.Error("failed to close pi-hole database", "err", err)
+		}
+	}()
 
 	// 4. Open the local guard database, creating it if needed.
 	guardStore, err := store.NewStore(guardDBPath)
@@ -87,7 +91,11 @@ func run() int {
 		slog.Error("failed to open guard database", "path", guardDBPath, "err", err)
 		return 1
 	}
-	defer guardStore.Close()
+	defer func() {
+		if err := guardStore.Close(); err != nil {
+			slog.Error("failed to close guard database", "err", err)
+		}
+	}()
 
 	slog.Info("guard database ready", "path", guardDBPath)
 

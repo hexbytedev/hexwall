@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // Connection matches somo's default JSON output.
@@ -32,14 +33,14 @@ func CheckInstalled() error {
 // GetEstablishedConnections returns a list of established TCP/UDP connections.
 func GetEstablishedConnections() ([]Connection, error) {
 	cmd := exec.Command("somo", "-e", "--json", "--no-pager")
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("failed to run somo: %w", err)
+		return nil, commandError("failed to run somo", err, output)
 	}
 
 	var result []Connection
 	if err := json.Unmarshal(output, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse JSON: %w", err)
+		return nil, fmt.Errorf("failed to parse somo JSON: %w", err)
 	}
 
 	return result, nil
@@ -47,14 +48,31 @@ func GetEstablishedConnections() ([]Connection, error) {
 
 // KillConnection kills a process by PID via somo.
 func KillConnection(pid string) error {
-	if pid == "-" || pid == "" {
-		return fmt.Errorf("invalid PID: %s", pid)
+	pid = strings.TrimSpace(pid)
+	if pid == "" || pid == "-" {
+		return fmt.Errorf("invalid PID %q", pid)
+	}
+
+	for _, r := range pid {
+		if r < '0' || r > '9' {
+			return fmt.Errorf("invalid PID %q", pid)
+		}
 	}
 
 	cmd := exec.Command("somo", "-k", "-p", pid)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to kill connection with PID %s: %w", pid, err)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return commandError(fmt.Sprintf("failed to kill connection with PID %s", pid), err, output)
 	}
 
 	return nil
+}
+
+func commandError(message string, err error, output []byte) error {
+	trimmed := strings.TrimSpace(string(output))
+	if trimmed == "" {
+		return fmt.Errorf("%s: %w", message, err)
+	}
+
+	return fmt.Errorf("%s: %w: %s", message, err, trimmed)
 }

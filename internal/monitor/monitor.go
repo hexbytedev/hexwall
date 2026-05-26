@@ -18,10 +18,45 @@ import (
 
 const (
 	// ModeWatch logs suspicious connections without killing them.
-	ModeWatch   = "watch"
+	ModeWatch = "watch"
 	// ModeEnforce kills suspicious connections and records the action.
 	ModeEnforce = "enforce"
 )
+
+func normalizeMode(mode string) string {
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case ModeEnforce:
+		return ModeEnforce
+	default:
+		return ModeWatch
+	}
+}
+
+func remoteIP(address string) (net.IP, error) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return nil, fmt.Errorf("empty remote address")
+	}
+
+	if host, _, err := net.SplitHostPort(address); err == nil {
+		ip := net.ParseIP(host)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid host %q", host)
+		}
+
+		return ip, nil
+	}
+
+	address = strings.TrimPrefix(address, "[")
+	address = strings.TrimSuffix(address, "]")
+
+	ip := net.ParseIP(address)
+	if ip == nil {
+		return nil, fmt.Errorf("invalid address %q", address)
+	}
+
+	return ip, nil
+}
 
 func logScanConnection(debug bool, ip, program, status string) {
 	if !debug {
@@ -33,7 +68,21 @@ func logScanConnection(debug bool, ip, program, status string) {
 
 // RunScan inspects established connections and applies the selected trust and kill policy.
 func RunScan(ctx context.Context, guardStore *store.Store, deghostClient *deghost.Client, mode string, debug bool) {
-	fmt.Printf("[%s] Scanning connections (%s mode)...\n", time.Now().Format("15:04:05"), mode)
+	if guardStore == nil {
+		slog.Error("scan aborted: nil guard store")
+		return
+	}
+	if deghostClient == nil {
+		slog.Error("scan aborted: nil deghost client")
+		return
+	}
+
+	selectedMode := normalizeMode(mode)
+	if selectedMode != mode {
+		slog.Warn("invalid scan mode; defaulting to watch", "mode", mode, "fallback", selectedMode)
+	}
+
+	fmt.Printf("[%s] Scanning connections (%s mode)...\n", time.Now().Format("15:04:05"), selectedMode)
 
 	connections, err := somo.GetEstablishedConnections()
 	if err != nil {
@@ -47,16 +96,9 @@ func RunScan(ctx context.Context, guardStore *store.Store, deghostClient *deghos
 	}
 
 	for _, conn := range connections {
-		// Extract the remote IP from both IPv4 and bracketed IPv6 addresses.
-		addr := strings.Trim(conn.RAddress, "[]")
-		host, _, err := net.SplitHostPort(addr)
+		ip, err := remoteIP(conn.RAddress)
 		if err != nil {
-			host = addr
-		}
-
-		ip := net.ParseIP(host)
-		if ip == nil {
-			slog.Warn("invalid IP address", "address", conn.RAddress)
+			slog.Warn("invalid IP address", "address", conn.RAddress, "err", err)
 			continue
 		}
 
@@ -104,12 +146,12 @@ func RunScan(ctx context.Context, guardStore *store.Store, deghostClient *deghos
 		logScanConnection(debug, ipStr, conn.Program, "vulnerable")
 
 		slog.Warn("vulnerable connection detected", "address", conn.RAddress, "pid", conn.PID, "program", conn.Program)
-		if mode == ModeWatch {
+		if selectedMode == ModeWatch {
 			slog.Warn("watch mode: would kill connection", "address", conn.RAddress, "pid", conn.PID, "program", conn.Program)
 			continue
 		}
 
-		if err := guardStore.LogKill(ip.String(), conn.PID, conn.Program); err != nil {
+		if err := guardStore.LogKill(ipStr, conn.PID, conn.Program); err != nil {
 			slog.Error("failed to log kill", "address", conn.RAddress, "err", err)
 		}
 		if err := somo.KillConnection(conn.PID); err != nil {

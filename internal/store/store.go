@@ -80,7 +80,7 @@ func sqliteDSN(dbPath, mode string) string {
 	query := url.Values{}
 	query.Set("mode", mode)
 
-	return (&url.URL{Scheme: "file", Path: dbPath, RawQuery: query.Encode()}).String()
+	return "file:" + (&url.URL{Path: dbPath, RawQuery: query.Encode()}).String()
 }
 
 func configureConnection(db *sql.DB, readOnly bool) error {

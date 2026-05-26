@@ -56,7 +56,7 @@ func NewChecker(config *Config) (*Checker, error) {
 		return nil, fmt.Errorf("close access check for %s: %w", config.DBPath, err)
 	}
 
-	dsn := (&url.URL{Scheme: "file", Path: config.DBPath, RawQuery: "mode=ro"}).String()
+	dsn := "file:" + (&url.URL{Path: config.DBPath, RawQuery: "mode=ro"}).String()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open pihole-db: %w", err)

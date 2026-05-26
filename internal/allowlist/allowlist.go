@@ -4,6 +4,7 @@
 package allowlist
 
 import (
+	"fmt"
 	"log/slog"
 	"net"
 	"strings"
@@ -21,23 +22,41 @@ var cidrs = []string{
 var nets []*net.IPNet
 
 func init() {
-	for _, cidr := range cidrs {
-		if !strings.Contains(cidr, "/") {
-			if strings.Contains(cidr, ":") {
-				cidr += "/128"
-			} else {
-				cidr += "/32"
-			}
-		}
+	loadCIDRs(cidrs)
+}
 
-		_, network, err := net.ParseCIDR(cidr)
+func loadCIDRs(values []string) {
+	for _, value := range values {
+		net, err := parseCIDR(value)
 		if err != nil {
-			slog.Error("invalid allowlist entry", "cidr", cidr, "err", err)
+			slog.Error("failed to parse allowlist CIDRs", "err", err)
 			continue
 		}
-
-		nets = append(nets, network)
+		nets = append(nets, net)
 	}
+}
+
+func parseCIDR(value string) (*net.IPNet, error) {
+	cidr := strings.TrimSpace(value)
+
+	if !strings.Contains(cidr, "/") {
+		ip := net.ParseIP(cidr)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid IP or CIDR: %q", value)
+		}
+		if ip.To4() != nil {
+			cidr += "/32"
+		} else {
+			cidr += "/128"
+		}
+	}
+
+	_, network, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid IP or CIDR: %q", value)
+	}
+
+	return network, nil
 }
 
 // Contains reports whether ip belongs to any statically trusted CIDR.

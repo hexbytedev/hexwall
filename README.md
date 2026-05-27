@@ -8,7 +8,7 @@ Monitors active network connections and kills any that connect to IPs that are n
 
 Pi-hole operates at the DNS layer. It can block a domain, but it has no visibility into connections that bypass DNS entirely — processes that dial a hard-coded IP address directly. Malware and compromised packages commonly use this technique to phone home without triggering any DNS-based block.
 
-pihole-guard works from the inverse assumption: **if an IP is not trusted, the connection is suspicious by default.** Trust is granted when the IP matches the built-in CIDR allowlist, was refreshed from Pi-hole query history within the last hour, or was already observed as an established connection within the last 60 seconds. On startup it immediately refreshes trusted IPs from Pi-hole, then refreshes them every 30 seconds while scanning connections every 10 seconds. Anything that falls outside that trust set is checked against an external fraud API. Confirmed threats are either logged (watch mode) or killed (enforce mode).
+pihole-guard works from the inverse assumption: **if an IP is not trusted, the connection is suspicious by default.** Trust is granted when the IP matches the built-in CIDR allowlist, was refreshed from Pi-hole query history within the last hour, or was already observed as an established connection within the last 60 seconds. On startup it immediately refreshes trusted IPs from Pi-hole, then refreshes them every 30 seconds while scanning connections every 10 seconds. Anything that falls outside that trust set is checked against an external fraud API, with results cached locally for 6 hours per IP. Confirmed threats are either logged (watch mode) or killed (enforce mode).
 
 ---
 
@@ -65,7 +65,7 @@ A connection is killed only when all of the following are true:
 1. `--mode enforce` is active.
 2. `somo` reports the connection as currently established.
 3. The remote IP is not trusted.
-4. The fraud API returns a report marking the IP as `is_abuser`, `is_attacker`, or `is_threat`.
+4. The remote IP's current fraud decision, either fetched live or reused from the local 6-hour cache, marks it as `is_abuser`, `is_attacker`, or `is_threat`.
 
 An IP is considered trusted when any of these are true:
 
@@ -78,11 +78,24 @@ Connections are not killed in these cases:
 - `--mode watch` is active. The connection is only logged as `would kill`.
 - The IP is on the built-in allowlist.
 - The IP is still trusted from a recent Pi-hole refresh or recent established-connection activity.
+- The IP already has a cached clean fraud verdict from the last 6 hours.
 - The fraud API returns HTTP `403`, which is treated as clean/private/reserved.
 - The fraud API returns a report but none of `is_abuser`, `is_attacker`, or `is_threat` are true.
 - The fraud lookup itself fails.
 
 When a kill does happen, pihole-guard first records the event in the local `killed_connections` audit table and then asks `somo` to kill the owning PID.
+
+### Fraud API cache behavior
+
+Fraud lookups are cached in the local SQLite database for 6 hours per IP.
+
+- If an untrusted IP has a cached fraud decision newer than 6 hours, pihole-guard reuses that cached result and does not call the fraud API again.
+- If the cached decision is older than 6 hours, the next scan calls the fraud API again and refreshes the cache timestamp.
+- Both clean and kill-worthy fraud decisions are cached.
+- HTTP `403` responses are treated as clean/private/reserved and cached as a non-kill result.
+- Fraud lookup failures are not cached.
+
+This cache lives in the local guard database as Unix timestamps (`INTEGER` / int64-style seconds) and survives restarts.
 
 ---
 

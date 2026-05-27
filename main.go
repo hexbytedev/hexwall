@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	deghostBaseURL         = "https://fraudcheckapi.hexbyte.dev"
+	deghostBaseURL         = "https://deghostapi.hexbyte.dev"
 	deghostTimeout         = 5 * time.Second
 	trustedRefreshInterval = 30 * time.Second
 	connectionScanInterval = 10 * time.Second

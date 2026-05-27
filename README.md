@@ -18,7 +18,7 @@ pihole-guard works from the inverse assumption: **if an IP is not trusted, the c
 | ----------------------------------------- | --------------------------------------------------- | --------------------------- |
 | [`somo`](https://github.com/theopfr/somo) | Lists established TCP/UDP connections; kills by PID | Must be in `$PATH`          |
 | Pi-hole FTL database                      | Source of trusted DNS history                       | Auto-detected or via `--db` |
-| `fraudcheckapi.hexbyte.dev`               | Fraud/threat classification for unknown IPs         | Network access required     |
+| `deghostapi.hexbyte.dev`                  | Fraud/threat classification for unknown IPs         | Network access required     |
 
 **Build dependency:** `modernc.org/sqlite` (pure-Go SQLite, no CGo or system libsqlite3 required).
 

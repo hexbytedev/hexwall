@@ -1,0 +1,269 @@
+// Package store manages the local pihole-guard SQLite database.
+// Unlike the Pi-hole DB, this database is owned by the tool
+// and persists trusted IPs and kill logs across restarts.
+package store
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"net/url"
+	"time"
+
+	// Register the pure-Go SQLite driver used for the local guard database.
+	_ "modernc.org/sqlite"
+)
+
+const (
+	refreshTrustWindow     = time.Hour
+	establishedTrustWindow = time.Minute
+	fraudCheckCacheWindow  = 6 * time.Hour
+	sqliteBusyTimeout      = 5 * time.Second
+)
+
+const schema = `
+CREATE TABLE IF NOT EXISTS allowed_ips (
+    ip               TEXT    PRIMARY KEY,
+    domain           TEXT    NOT NULL,
+    first_approved   INTEGER NOT NULL,
+    last_refreshed   INTEGER NOT NULL,
+    last_established INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS killed_connections (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    ip        TEXT    NOT NULL,
+    pid       TEXT    NOT NULL,
+    program   TEXT    NOT NULL,
+    killed_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fraud_checks (
+    ip         TEXT    PRIMARY KEY,
+    should_kill INTEGER NOT NULL,
+    checked_at INTEGER NOT NULL
+);
+`
+
+// FraudCheckCacheEntry stores the cached kill decision for a prior fraud API lookup.
+type FraudCheckCacheEntry struct {
+	ShouldKill bool
+	CheckedAt  int64
+}
+
+// Store wraps the local guard database.
+type Store struct {
+	readWrite *sql.DB
+	readOnly  *sql.DB
+}
+
+// NewStore opens or creates the guard database at dbPath and applies the schema.
+func NewStore(dbPath string) (*Store, error) {
+	readWrite, err := sql.Open("sqlite", sqliteDSN(dbPath, "rwc"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to open guard db: %w", err)
+	}
+
+	if err := configureConnection(readWrite, false); err != nil {
+		_ = readWrite.Close()
+		return nil, fmt.Errorf("failed to connect to guard db: %w", err)
+	}
+
+	if _, err := readWrite.Exec(schema); err != nil {
+		_ = readWrite.Close()
+		return nil, fmt.Errorf("failed to apply schema: %w", err)
+	}
+
+	readOnly, err := sql.Open("sqlite", sqliteDSN(dbPath, "ro"))
+	if err != nil {
+		_ = readWrite.Close()
+		return nil, fmt.Errorf("failed to open guard db read-only connection: %w", err)
+	}
+
+	if err := configureConnection(readOnly, true); err != nil {
+		_ = readOnly.Close()
+		_ = readWrite.Close()
+		return nil, fmt.Errorf("failed to connect to guard db read-only connection: %w", err)
+	}
+
+	return &Store{readWrite: readWrite, readOnly: readOnly}, nil
+}
+
+func sqliteDSN(dbPath, mode string) string {
+	query := url.Values{}
+	query.Set("mode", mode)
+
+	return "file:" + (&url.URL{Path: dbPath, RawQuery: query.Encode()}).String()
+}
+
+func configureConnection(db *sql.DB, readOnly bool) error {
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	if err := db.Ping(); err != nil {
+		return fmt.Errorf("ping db: %w", err)
+	}
+
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA busy_timeout=%d;`, sqliteBusyTimeout/time.Millisecond)); err != nil {
+		return fmt.Errorf("set busy_timeout: %w", err)
+	}
+
+	if readOnly {
+		return nil
+	}
+
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL;`); err != nil {
+		return fmt.Errorf("set journal_mode WAL: %w", err)
+	}
+
+	return nil
+}
+
+// Close closes both database connections.
+func (s *Store) Close() error {
+	if s == nil {
+		return nil
+	}
+
+	var errReadWrite error
+	var errReadOnly error
+
+	if s.readWrite != nil {
+		errReadWrite = s.readWrite.Close()
+	}
+
+	if s.readOnly != nil {
+		errReadOnly = s.readOnly.Close()
+	}
+
+	return errors.Join(errReadWrite, errReadOnly)
+}
+
+// UpsertAllowedIP inserts or refreshes a trusted IP.
+// On conflict, it updates the domain and last_refreshed while preserving first_approved and last_established.
+func (s *Store) UpsertAllowedIP(ip, domain string) error {
+	now := time.Now().Unix()
+
+	_, err := s.readWrite.Exec(`
+		INSERT INTO allowed_ips (ip, domain, first_approved, last_refreshed)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(ip) DO UPDATE SET
+			domain        = excluded.domain,
+			last_refreshed = excluded.last_refreshed
+	`, ip, domain, now, now)
+
+	if err != nil {
+		return fmt.Errorf("upsert allowed ip %s: %w", ip, err)
+	}
+
+	return nil
+}
+
+// UpdateEstablished stamps the current time as last_established for an IP.
+// The monitor calls it when somo confirms the connection is still active.
+func (s *Store) UpdateEstablished(ip string) error {
+	_, err := s.readWrite.Exec(`
+		UPDATE allowed_ips SET last_established = ? WHERE ip = ?
+	`, time.Now().Unix(), ip)
+
+	if err != nil {
+		return fmt.Errorf("update established %s: %w", ip, err)
+	}
+
+	return nil
+}
+
+// IsAllowed reports whether the IP is trusted based on a recent Pi-hole refresh or recent established-connection activity.
+//
+// It returns true if the IP is trusted. An IP is trusted when either:
+//   - It was refreshed from Pi-hole's domain history within the last hour, OR
+//   - somo confirmed it as an active established connection within the last 60 seconds
+//     (keeps long-running connections alive even after their domain ages out)
+func (s *Store) IsAllowed(ip string) (bool, error) {
+	now := time.Now()
+	refreshCutoff := now.Add(-refreshTrustWindow).Unix()
+	establishedCutoff := now.Add(-establishedTrustWindow).Unix()
+
+	var found int
+	err := s.readOnly.QueryRow(`
+		SELECT 1 FROM allowed_ips
+		WHERE ip = ?
+		  AND (last_refreshed   >= ?
+		    OR last_established >= ?)
+		LIMIT 1
+	`, ip, refreshCutoff, establishedCutoff).Scan(&found)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("is allowed query for %s: %w", ip, err)
+	}
+
+	return true, nil
+}
+
+// GetRecentFraudCheck returns the cached fraud-check decision when it was recorded within the cache window.
+func (s *Store) GetRecentFraudCheck(ip string) (*FraudCheckCacheEntry, error) {
+	cutoff := time.Now().Add(-fraudCheckCacheWindow).Unix()
+
+	var shouldKill int
+	var checkedAt int64
+	err := s.readOnly.QueryRow(`
+		SELECT should_kill, checked_at
+		FROM fraud_checks
+		WHERE ip = ?
+		  AND checked_at >= ?
+		LIMIT 1
+	`, ip, cutoff).Scan(&shouldKill, &checkedAt)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("get recent fraud check for %s: %w", ip, err)
+	}
+
+	return &FraudCheckCacheEntry{
+		ShouldKill: shouldKill != 0,
+		CheckedAt:  checkedAt,
+	}, nil
+}
+
+// UpsertFraudCheck stores the current fraud-check decision for an IP.
+func (s *Store) UpsertFraudCheck(ip string, shouldKill bool) error {
+	shouldKillInt := 0
+	if shouldKill {
+		shouldKillInt = 1
+	}
+
+	_, err := s.readWrite.Exec(`
+		INSERT INTO fraud_checks (ip, should_kill, checked_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(ip) DO UPDATE SET
+			should_kill = excluded.should_kill,
+			checked_at = excluded.checked_at
+	`, ip, shouldKillInt, time.Now().Unix())
+
+	if err != nil {
+		return fmt.Errorf("upsert fraud check %s: %w", ip, err)
+	}
+
+	return nil
+}
+
+// LogKill records a killed connection in the audit log.
+func (s *Store) LogKill(ip, pid, program string) error {
+	_, err := s.readWrite.Exec(`
+		INSERT INTO killed_connections (ip, pid, program, killed_at)
+		VALUES (?, ?, ?, ?)
+	`, ip, pid, program, time.Now().Unix())
+
+	if err != nil {
+		return fmt.Errorf("log kill %s: %w", ip, err)
+	}
+
+	return nil
+}

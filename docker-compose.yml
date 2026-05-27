@@ -1,0 +1,35 @@
+name: pihole
+services:
+  pihole_guard:
+    # trixie is required for GLIBC_2.39
+    image: golang:1.26.3-trixie
+    container_name: pihole_guard
+    working_dir: /app
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Berlin
+    init: true
+    # monitor IPs
+    network_mode: host
+    # monitor which applications are using which sockets:
+    # pid, SYS_PTRACE, apparmor=unconfined
+    pid: host
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - apparmor=unconfined
+    entrypoint:
+      - /app/guard
+    command:
+      - --db
+      - /etc/pihole/pihole-FTL.db
+      - --guard-db
+      - /app/pihole-guard.db
+      - --mode
+      - ${PIHOLE_GUARD_MODE:-watch}
+    volumes:
+      - ./app:/app
+      - ${SOMO_BINARY:-/usr/local/bin/somo}:/usr/local/bin/somo:ro
+      - ${PIHOLE_DB_DIR:-/etc/pihole}:/etc/pihole:ro
+
+# ./guard --guard-db pihole-guard.db --db /etc/pihole/pihole-FTL.db --mode watch -debug

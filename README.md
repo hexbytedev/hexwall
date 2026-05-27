@@ -1,6 +1,10 @@
 # pihole-guard
 
-Monitors active network connections and kills any that connect to IPs not previously seen through Pi-hole's DNS resolver — closing the gap that Pi-hole leaves open for direct-IP connections.
+`pihole-guard` is an outbound exfiltration brake for servers already protected by Pi-hole. When a supply-chain attack, malware implant, or compromised package is already running inside the machine, it can skip DNS entirely and send stolen data straight to a hard-coded IP. Pi-hole does not see that hop. `somo` can see the live connection. `pihole-guard` uses that visibility to flag and, in `enforce` mode, kill suspicious direct-IP connections before data leaves the server.
+
+It monitors active network connections and kills any that connect to IPs that are not trusted by Pi-hole history, the built-in local allowlist, or recent already-established traffic — closing the gap that Pi-hole leaves open for direct-IP connections.
+
+In short: `Pi-hole + somo + pihole-guard` gives you a practical containment layer for post-compromise outbound traffic, especially the kind of direct-IP exfiltration occasionally used in supply-chain attacks.
 
 ---
 
@@ -8,8 +12,7 @@ Monitors active network connections and kills any that connect to IPs not previo
 
 Pi-hole operates at the DNS layer. It can block a domain, but it has no visibility into connections that bypass DNS entirely — processes that dial a hard-coded IP address directly. Malware and compromised packages commonly use this technique to phone home without triggering any DNS-based block.
 
-pihole-guard works from the inverse assumption: **if an IP was never resolved through Pi-hole, the connection is suspicious by default.** Every 30 seconds it reads Pi-hole's own query history, resolves those domains forward, and builds a local allow-set of trusted IPs. Anything that falls outside that set is checked against an external fraud API. Confirmed threats are either logged (watch mode) or killed (enforce mode).
-
+pihole-guard works from the inverse assumption: **if an IP is not trusted, the connection is suspicious by default.** Trust is granted when the IP matches the built-in CIDR allowlist, was refreshed from Pi-hole query history within the last hour, or was already observed as an established connection within the last 60 seconds. On startup it immediately refreshes trusted IPs from Pi-hole, then refreshes them every 30 seconds while scanning connections every 10 seconds. Anything that falls outside that trust set is checked against an external fraud API, with results cached locally for 6 hours per IP. Confirmed threats are either logged (watch mode) or killed (enforce mode).
 
 ---
 
@@ -19,7 +22,7 @@ pihole-guard works from the inverse assumption: **if an IP was never resolved th
 | ----------------------------------------- | --------------------------------------------------- | --------------------------- |
 | [`somo`](https://github.com/theopfr/somo) | Lists established TCP/UDP connections; kills by PID | Must be in `$PATH`          |
 | Pi-hole FTL database                      | Source of trusted DNS history                       | Auto-detected or via `--db` |
-| `fraudcheckapi.hexbyte.dev`               | Fraud/threat classification for unknown IPs         | Network access required     |
+| `deghostapi.hexbyte.dev`                  | Fraud/threat classification for unknown IPs         | Network access required     |
 
 **Build dependency:** `modernc.org/sqlite` (pure-Go SQLite, no CGo or system libsqlite3 required).
 
@@ -43,5 +46,87 @@ If neither is found, start fails. Use `--db` to specify the path manually.
 | `--db`       | _(auto-detected)_   | Path to `pihole-FTL.db`                                          |
 | `--guard-db` | `./pihole-guard.db` | Path to the local guard database (created on first run)          |
 | `--mode`     | `watch`             | `watch` — detect and log only; `enforce` — detect, log, and kill |
+| `--debug`    | `false`             | Enable verbose per-connection scan logging                       |
 
 `--mode` accepts `watch` or `enforce` (case-insensitive). Any other value exits with an error.
+
+### Debug logging
+
+When `--debug` is enabled, each scan cycle logs every connection it encounters with its status:
+
+- **allowed** — IP is in the local trust cache or allowlist
+- **unrecognized-clean** — IP is not in cache, but the fraud API returned a clean verdict (or 403 for private/reserved ranges)
+- **vulnerable** — IP is not in cache, fraud API flagged it as abuser/attacker/threat
+
+When debug is disabled (default), only non-allowed results are logged. Additionally, empty scans (somo returning zero connections) are always logged regardless of debug mode.
+
+---
+
+## When a connection is killed
+
+A connection is killed only when all of the following are true:
+
+1. `--mode enforce` is active.
+2. `somo` reports the connection as currently established.
+3. The remote IP is not trusted.
+4. The remote IP's current fraud decision, either fetched live or reused from the local 6-hour cache, marks it as `is_abuser`, `is_attacker`, or `is_threat`.
+
+An IP is considered trusted when any of these are true:
+
+- It matches the built-in CIDR allowlist.
+- It was refreshed from Pi-hole history within the last hour.
+- It was already seen as an established allowed connection within the last 60 seconds.
+
+Connections are not killed in these cases:
+
+- `--mode watch` is active. The connection is only logged as `would kill`.
+- The IP is on the built-in allowlist.
+- The IP is still trusted from a recent Pi-hole refresh or recent established-connection activity.
+- The IP already has a cached clean fraud verdict from the last 6 hours.
+- The fraud API returns HTTP `403`, which is treated as clean/private/reserved.
+- The fraud API returns a report but none of `is_abuser`, `is_attacker`, or `is_threat` are true.
+- The fraud lookup itself fails.
+
+When a kill does happen, pihole-guard first records the event in the local `killed_connections` audit table and then asks `somo` to kill the owning PID.
+
+### Fraud API cache behavior
+
+Fraud lookups are cached in the local SQLite database for 6 hours per IP.
+
+- If an untrusted IP has a cached fraud decision newer than 6 hours, pihole-guard reuses that cached result and does not call the fraud API again.
+- If the cached decision is older than 6 hours, the next scan calls the fraud API again and refreshes the cache timestamp.
+- Both clean and kill-worthy fraud decisions are cached.
+- HTTP `403` responses are treated as clean/private/reserved and cached as a non-kill result.
+- Fraud lookup failures are not cached.
+
+This cache lives in the local guard database as Unix timestamps (`INTEGER` / int64-style seconds) and survives restarts.
+
+---
+
+## How Pi-hole history becomes trusted IPs
+
+Pi-hole trust is built from recent DNS history, not by directly trusting every current connection. The refresh flow is:
+
+1. Read the `queries` table from `pihole-FTL.db`.
+2. Select distinct non-empty domains seen within the last hour.
+3. Normalize them to lowercase and trim whitespace.
+4. Resolve each domain through the system DNS resolver, with bounded concurrency and a 1 second lookup timeout per domain.
+5. Ignore domains that do not resolve. This is normal for blocked domains, expired records, and similar cases.
+6. Deduplicate resolved IPs. If multiple domains resolve to the same IP, the first domain in sorted order is stored for that IP.
+7. Upsert each resolved IP into the local `allowed_ips` table, setting or refreshing `last_refreshed`.
+
+Important details:
+
+- Startup performs this refresh immediately before the first monitoring scan, so normal traffic seen in recent Pi-hole history is trusted before enforcement begins.
+- The refresh repeats every 30 seconds.
+- Trust from Pi-hole refresh lasts for 1 hour from the most recent successful upsert.
+- Existing rows keep their original `first_approved` and `last_established` values when refreshed; only the stored domain and `last_refreshed` timestamp are updated.
+- The monitor also extends trust for long-lived allowed connections by updating `last_established` whenever an already-trusted connection is seen still established.
+
+This means an IP becomes trusted from Pi-hole history only after all of these happen:
+
+1. Pi-hole recorded a domain query for it within the last hour.
+2. That domain still resolves during a refresh cycle.
+3. One of the resolved IPs is written into the local `allowed_ips` cache.
+
+If a domain was seen in Pi-hole history but no longer resolves during refresh, no IP is added for it, so there is nothing to trust from that domain alone.

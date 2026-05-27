@@ -17,6 +17,7 @@ import (
 const (
 	refreshTrustWindow     = time.Hour
 	establishedTrustWindow = time.Minute
+	fraudCheckCacheWindow  = 6 * time.Hour
 	sqliteBusyTimeout      = 5 * time.Second
 )
 
@@ -36,7 +37,19 @@ CREATE TABLE IF NOT EXISTS killed_connections (
     program   TEXT    NOT NULL,
     killed_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS fraud_checks (
+    ip         TEXT    PRIMARY KEY,
+    should_kill INTEGER NOT NULL,
+    checked_at INTEGER NOT NULL
+);
 `
+
+// FraudCheckCacheEntry stores the cached kill decision for a prior fraud API lookup.
+type FraudCheckCacheEntry struct {
+	ShouldKill bool
+	CheckedAt  int64
+}
 
 // Store wraps the local guard database.
 type Store struct {
@@ -189,6 +202,56 @@ func (s *Store) IsAllowed(ip string) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// GetRecentFraudCheck returns the cached fraud-check decision when it was recorded within the cache window.
+func (s *Store) GetRecentFraudCheck(ip string) (*FraudCheckCacheEntry, error) {
+	cutoff := time.Now().Add(-fraudCheckCacheWindow).Unix()
+
+	var shouldKill int
+	var checkedAt int64
+	err := s.readOnly.QueryRow(`
+		SELECT should_kill, checked_at
+		FROM fraud_checks
+		WHERE ip = ?
+		  AND checked_at >= ?
+		LIMIT 1
+	`, ip, cutoff).Scan(&shouldKill, &checkedAt)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("get recent fraud check for %s: %w", ip, err)
+	}
+
+	return &FraudCheckCacheEntry{
+		ShouldKill: shouldKill != 0,
+		CheckedAt:  checkedAt,
+	}, nil
+}
+
+// UpsertFraudCheck stores the current fraud-check decision for an IP.
+func (s *Store) UpsertFraudCheck(ip string, shouldKill bool) error {
+	shouldKillInt := 0
+	if shouldKill {
+		shouldKillInt = 1
+	}
+
+	_, err := s.readWrite.Exec(`
+		INSERT INTO fraud_checks (ip, should_kill, checked_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(ip) DO UPDATE SET
+			should_kill = excluded.should_kill,
+			checked_at = excluded.checked_at
+	`, ip, shouldKillInt, time.Now().Unix())
+
+	if err != nil {
+		return fmt.Errorf("upsert fraud check %s: %w", ip, err)
+	}
+
+	return nil
 }
 
 // LogKill records a killed connection in the audit log.

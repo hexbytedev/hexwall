@@ -125,6 +125,37 @@ func RunScan(ctx context.Context, guardStore *store.Store, deghostClient *deghos
 			continue
 		}
 
+		cachedFraudCheck, err := guardStore.GetRecentFraudCheck(ipStr)
+		if err != nil {
+			slog.Error("fraud cache lookup failed", "ip", ipStr, "program", conn.Program, "err", err)
+			continue
+		}
+
+		if cachedFraudCheck != nil {
+			if !cachedFraudCheck.ShouldKill {
+				slog.Info("unrecognized but clean ip", "ip", ipStr, "program", conn.Program, "reason", "cached-fraud-check")
+				logScanConnection(debug, ipStr, conn.Program, "unrecognized-clean")
+				continue
+			}
+
+			logScanConnection(debug, ipStr, conn.Program, "vulnerable")
+			slog.Warn("vulnerable connection detected", "address", conn.RAddress, "pid", conn.PID, "program", conn.Program, "reason", "cached-fraud-check")
+			if selectedMode == ModeWatch {
+				slog.Warn("watch mode: would kill connection", "address", conn.RAddress, "pid", conn.PID, "program", conn.Program)
+				continue
+			}
+
+			if err := guardStore.LogKill(ipStr, conn.PID, conn.Program); err != nil {
+				slog.Error("failed to log kill", "address", conn.RAddress, "err", err)
+			}
+			if err := somo.KillConnection(conn.PID); err != nil {
+				slog.Error("failed to kill connection", "address", conn.RAddress, "pid", conn.PID, "err", err)
+			} else {
+				slog.Info("killed connection", "address", conn.RAddress)
+			}
+			continue
+		}
+
 		report, err := deghostClient.CheckIP(ctx, ipStr)
 		if err != nil {
 			slog.Error("deghost check failed", "ip", ipStr, "program", conn.Program, "err", err)
@@ -132,12 +163,20 @@ func RunScan(ctx context.Context, guardStore *store.Store, deghostClient *deghos
 		}
 
 		if report == nil {
+			if err := guardStore.UpsertFraudCheck(ipStr, false); err != nil {
+				slog.Error("failed to cache fraud check", "ip", ipStr, "program", conn.Program, "err", err)
+			}
 			slog.Info("unrecognized but clean ip", "ip", ipStr, "program", conn.Program, "reason", "403/private-or-reserved")
 			logScanConnection(debug, ipStr, conn.Program, "unrecognized-clean")
 			continue
 		}
 
-		if !deghost.ShouldKill(report) {
+		shouldKill := deghost.ShouldKill(report)
+		if err := guardStore.UpsertFraudCheck(ipStr, shouldKill); err != nil {
+			slog.Error("failed to cache fraud check", "ip", ipStr, "program", conn.Program, "err", err)
+		}
+
+		if !shouldKill {
 			slog.Info("unrecognized but clean ip", "ip", ipStr, "program", conn.Program)
 			logScanConnection(debug, ipStr, conn.Program, "unrecognized-clean")
 			continue

@@ -6,6 +6,17 @@ It monitors active network connections and kills any that connect to IPs that ar
 
 In short: `Pi-hole + somo + pihole-guard` gives you a practical containment layer for post-compromise outbound traffic, especially the kind of direct-IP exfiltration occasionally used in supply-chain attacks.
 
+## At a glance
+
+| Situation | Server without Pi-hole DNS | Server with only Pi-hole | Server with Pi-hole + somo + pihole-guard |
+| --- | --- | --- | --- |
+| Malicious domain resolved over DNS | ❌ Exposed | ✅ Can block at DNS layer | ✅ Can block at DNS layer |
+| Malware connects to a hard-coded IP directly | ❌ Exposed | ❌ Pi-hole does not see it | ✅ Direct-IP connection is visible and checked |
+| Identify which process owns the connection | ❌ No built-in visibility | ❌ No process visibility | ✅ `somo` shows PID/program |
+| Stop outbound exfiltration after compromise | ❌ No containment layer | ⚠️ Only if the attacker still uses DNS | ✅ Can kill suspicious established connections |
+| Supply-chain malware bypassing DNS | ❌ High risk | ❌ Still exposed | ✅ Stronger containment |
+| Overall outbound protection posture | ❌ Weak | ⚠️ Partial | 🛡️ Strongest of the three |
+
 ---
 
 ## The problem
@@ -25,6 +36,26 @@ pihole-guard works from the inverse assumption: **if an IP is not trusted, the c
 | `deghostapi.hexbyte.dev`                  | Fraud/threat classification for unknown IPs         | Network access required     |
 
 **Build dependency:** `modernc.org/sqlite` (pure-Go SQLite, no CGo or system libsqlite3 required).
+
+### Install `somo`
+
+If `somo` is not already in your `$PATH`, this is the quickest way to install and verify it on Ubuntu or Debian:
+
+```sh
+curl https://sh.rustup.rs -sSf | sh
+sudo apt install build-essential
+cargo install somo
+sudo ln -s "$HOME/.cargo/bin/somo" /usr/local/bin/somo
+sudo somo
+```
+
+What these steps do:
+
+- install Rust tooling with `rustup`
+- install the compiler toolchain needed to build `somo`
+- build and install `somo` with Cargo
+- expose `somo` system-wide through `/usr/local/bin`
+- run `sudo somo` once to confirm it can see live connections and PIDs
 
 ---
 

@@ -1,6 +1,10 @@
 # pihole-guard
 
-Monitors active network connections and kills any that connect to IPs that are not trusted by Pi-hole history, the built-in local allowlist, or recent already-established traffic — closing the gap that Pi-hole leaves open for direct-IP connections.
+`pihole-guard` is an outbound exfiltration brake for servers already protected by Pi-hole. When a supply-chain attack, malware implant, or compromised package is already running inside the machine, it can skip DNS entirely and send stolen data straight to a hard-coded IP. Pi-hole does not see that hop. `somo` can see the live connection. `pihole-guard` uses that visibility to flag and, in `enforce` mode, kill suspicious direct-IP connections before data leaves the server.
+
+It monitors active network connections and kills any that connect to IPs that are not trusted by Pi-hole history, the built-in local allowlist, or recent already-established traffic — closing the gap that Pi-hole leaves open for direct-IP connections.
+
+In short: `Pi-hole + somo + pihole-guard` gives you a practical containment layer for post-compromise outbound traffic, especially the kind of direct-IP exfiltration occasionally used in supply-chain attacks.
 
 ---
 

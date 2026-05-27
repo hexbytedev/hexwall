@@ -55,3 +55,61 @@ When `--debug` is enabled, each scan cycle logs every connection it encounters w
 - **vulnerable** — IP is not in cache, fraud API flagged it as abuser/attacker/threat
 
 When debug is disabled (default), only non-allowed results are logged. Additionally, empty scans (somo returning zero connections) are always logged regardless of debug mode.
+
+---
+
+## When a connection is killed
+
+A connection is killed only when all of the following are true:
+
+1. `--mode enforce` is active.
+2. `somo` reports the connection as currently established.
+3. The remote IP is not trusted.
+4. The fraud API returns a report marking the IP as `is_abuser`, `is_attacker`, or `is_threat`.
+
+An IP is considered trusted when any of these are true:
+
+- It matches the built-in CIDR allowlist.
+- It was refreshed from Pi-hole history within the last hour.
+- It was already seen as an established allowed connection within the last 60 seconds.
+
+Connections are not killed in these cases:
+
+- `--mode watch` is active. The connection is only logged as `would kill`.
+- The IP is on the built-in allowlist.
+- The IP is still trusted from a recent Pi-hole refresh or recent established-connection activity.
+- The fraud API returns HTTP `403`, which is treated as clean/private/reserved.
+- The fraud API returns a report but none of `is_abuser`, `is_attacker`, or `is_threat` are true.
+- The fraud lookup itself fails.
+
+When a kill does happen, pihole-guard first records the event in the local `killed_connections` audit table and then asks `somo` to kill the owning PID.
+
+---
+
+## How Pi-hole history becomes trusted IPs
+
+Pi-hole trust is built from recent DNS history, not by directly trusting every current connection. The refresh flow is:
+
+1. Read the `queries` table from `pihole-FTL.db`.
+2. Select distinct non-empty domains seen within the last hour.
+3. Normalize them to lowercase and trim whitespace.
+4. Resolve each domain through the system DNS resolver, with bounded concurrency and a 1 second lookup timeout per domain.
+5. Ignore domains that do not resolve. This is normal for blocked domains, expired records, and similar cases.
+6. Deduplicate resolved IPs. If multiple domains resolve to the same IP, the first domain in sorted order is stored for that IP.
+7. Upsert each resolved IP into the local `allowed_ips` table, setting or refreshing `last_refreshed`.
+
+Important details:
+
+- Startup performs this refresh immediately before the first monitoring scan, so normal traffic seen in recent Pi-hole history is trusted before enforcement begins.
+- The refresh repeats every 30 seconds.
+- Trust from Pi-hole refresh lasts for 1 hour from the most recent successful upsert.
+- Existing rows keep their original `first_approved` and `last_established` values when refreshed; only the stored domain and `last_refreshed` timestamp are updated.
+- The monitor also extends trust for long-lived allowed connections by updating `last_established` whenever an already-trusted connection is seen still established.
+
+This means an IP becomes trusted from Pi-hole history only after all of these happen:
+
+1. Pi-hole recorded a domain query for it within the last hour.
+2. That domain still resolves during a refresh cycle.
+3. One of the resolved IPs is written into the local `allowed_ips` cache.
+
+If a domain was seen in Pi-hole history but no longer resolves during refresh, no IP is added for it, so there is nothing to trust from that domain alone.

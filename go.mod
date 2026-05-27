@@ -1,6 +1,6 @@
 module github.com/hexbytedev/pihole-guard
 
-go 1.25.4
+go 1.26.0
 
 require modernc.org/sqlite v1.48.1
 

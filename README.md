@@ -1,5 +1,13 @@
 # pihole-guard
 
+[![Go Reference][1]][2]
+[![CodeQL Advanced][3]][4]
+[![golangci-lint][5]][6]
+[![Dependency Review][7]][8]
+[![Dependency Graph][9]][10]
+[![Dependabot Updates][11]][12]
+[![Go][13]][14]
+
 `pihole-guard` is an outbound exfiltration brake for servers already protected by Pi-hole. When a supply-chain attack, malware implant, or compromised package is already running inside the machine, it can skip DNS entirely and send stolen data straight to a hard-coded IP. Pi-hole does not see that hop. `somo` can see the live connection. `pihole-guard` uses that visibility to flag and, in `enforce` mode, kill suspicious direct-IP connections before data leaves the server.
 
 It monitors active network connections and kills any that connect to IPs that are not trusted by Pi-hole history, the built-in local allowlist, or recent already-established traffic — closing the gap that Pi-hole leaves open for direct-IP connections.
@@ -176,3 +184,20 @@ This means an IP becomes trusted from Pi-hole history only after all of these ha
 3. One of the resolved IPs is written into the local `allowed_ips` cache.
 
 If a domain was seen in Pi-hole history but no longer resolves during refresh, no IP is added for it, so there is nothing to trust from that domain alone.
+
+---
+
+[1]: https://pkg.go.dev/badge/github.com/hexbytedev/pihole-guard
+[2]: https://pkg.go.dev/github.com/hexbytedev/pihole-guard
+[3]: https://github.com/hexbytedev/pihole-guard/actions/workflows/codeql.yml/badge.svg
+[4]: https://github.com/hexbytedev/pihole-guard/actions/workflows/codeql.yml
+[5]: https://github.com/hexbytedev/pihole-guard/actions/workflows/golangci-lint.yml/badge.svg
+[6]: https://github.com/hexbytedev/pihole-guard/actions/workflows/golangci-lint.yml
+[7]: https://github.com/hexbytedev/pihole-guard/actions/workflows/dependency-review.yml/badge.svg
+[8]: https://github.com/hexbytedev/pihole-guard/actions/workflows/dependency-review.yml
+[9]: https://github.com/hexbytedev/pihole-guard/actions/workflows/dependabot/update-graph/badge.svg
+[10]: https://github.com/hexbytedev/pihole-guard/actions/workflows/dependabot/update-graph
+[11]: https://github.com/hexbytedev/pihole-guard/actions/workflows/dependabot/dependabot-updates/badge.svg
+[12]: https://github.com/hexbytedev/pihole-guard/actions/workflows/dependabot/dependabot-updates
+[13]: https://github.com/hexbytedev/pihole-guard/actions/workflows/go.yml/badge.svg
+[14]: https://github.com/hexbytedev/pihole-guard/actions/workflows/go.yml

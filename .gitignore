@@ -1,2 +1,12 @@
+# Ignored files and directories #
+#################################
+*.log
+.env
+*.bak
+vendor/
 guard
 pihole-guard*
+tmp
+.vscode
+coverage.txt
+.build

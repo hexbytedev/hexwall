@@ -37,6 +37,21 @@ pihole-guard works from the inverse assumption: **if an IP is not trusted, the c
 
 **Build dependency:** `modernc.org/sqlite` (pure-Go SQLite, no CGo or system libsqlite3 required).
 
+## Binaries and deployment
+
+CI publishes lightweight Linux binaries for:
+
+- `linux/amd64`
+- `linux/arm64`
+
+You can download them from the project's GitHub Releases page:
+
+- [GitHub Releases](https://github.com/hexbytedev/pihole-guard/releases)
+
+For production Linux servers, download the matching binary from Releases, place it where your deployment expects `./app/guard`, and use the included demo Docker Compose file at [`docker-compose.yml`](./docker-compose.yml) to launch it on the server.
+
+For macOS and Windows, prebuilt binaries are not published by CI. Clone the repository and build the binary manually before deployment.
+
 ### Install `somo`
 
 If `somo` is not already in your `$PATH`, this is the quickest way to install and verify it on Ubuntu or Debian:

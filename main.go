@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -27,6 +28,9 @@ const (
 	connectionScanInterval = 10 * time.Second
 )
 
+var version = "dev"
+var platform = runtime.GOOS + "/" + runtime.GOARCH
+
 func main() {
 	os.Exit(run())
 }
@@ -36,7 +40,13 @@ func run() int {
 	guardDB := flag.String("guard-db", "./pihole-guard.db", "path to local guard database")
 	mode := flag.String("mode", monitor.ModeWatch, "monitor mode: watch (detect only) or enforce (kill + log)")
 	debug := flag.Bool("debug", false, "enable verbose per-connection scan logging")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("%s (%s)\n", version, platform)
+		return 0
+	}
 
 	selectedMode := strings.ToLower(strings.TrimSpace(*mode))
 	if selectedMode != monitor.ModeWatch && selectedMode != monitor.ModeEnforce {

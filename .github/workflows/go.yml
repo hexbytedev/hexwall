@@ -1,0 +1,163 @@
+name: Go
+
+on:
+  push:
+    paths:
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '**/*.yml'
+  pull_request:
+    paths:
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '**/*.yml'
+  create:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.event_name != 'create'
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1
+      matrix:
+        go-version: [1.26.x]
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+      - run: go version
+
+      - name: Examine source code for Linux AMD
+        run: GOOS=linux GOARCH=amd64 go vet -v ./...
+
+      - name: Examine source code for MacOS AMD
+        run: GOOS=darwin GOARCH=amd64 go vet -v ./...
+
+      - name: Examine source code for Windows AMD
+        run: GOOS=windows GOARCH=amd64 go vet -v ./...
+
+      - name: Examine source code for Linux ARM
+        run: GOOS=linux GOARCH=arm64 go vet -v ./...
+
+      - name: Examine source code for MacOS ARM
+        run: GOOS=darwin GOARCH=arm64 go vet -v ./...
+
+      - name: Examine source code for Windows ARM
+        run: GOOS=windows GOARCH=arm64 go vet -v ./...
+
+      - name: Build for Linux AMD
+        run: GOOS=linux GOARCH=amd64 go build -v ./...
+
+      - name: Build for MacOS AMD
+        run: GOOS=darwin GOARCH=amd64 go build -v ./...
+
+      - name: Build for Windows AMD
+        run: GOOS=windows GOARCH=amd64 go build -v ./...
+
+      - name: Build for Linux ARM
+        run: GOOS=linux GOARCH=arm64 go build -v ./...
+
+      - name: Build for MacOS ARM
+        run: GOOS=darwin GOARCH=arm64 go build -v ./...
+
+      - name: Build for Windows ARM
+        run: GOOS=windows GOARCH=arm64 go build -v ./...
+
+      - name: Test
+      # https://stackoverflow.com/questions/58139406/only-run-job-on-specific-branch-with-github-actions
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: go test -race -v -cover -coverpkg=./... -coverprofile=coverage.txt -covermode=atomic ./...
+
+  release-build:
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'create' && github.ref_type == 'tag')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.x
+          cache: true
+
+      - name: Build release binary
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          RELEASE_TAG: ${{ github.event_name == 'create' && github.ref || github.ref_name }}
+        run: |
+          mkdir -p dist
+          version_tag="${RELEASE_TAG#v}"
+          safe_tag="${version_tag//\//-}"
+          ext=""
+
+          if [ "$GOOS" = "windows" ]; then
+            ext=".exe"
+          fi
+
+          output="dist/pihole-guard_v${safe_tag}_${GOOS}_${GOARCH}${ext}"
+          go build -trimpath -ldflags="-s -w -X main.version=v${version_tag} -X main.platform=${GOOS}/${GOARCH}" -o "$output" .
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release-publish:
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'create' && github.ref_type == 'tag')
+    needs: release-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Upload assets to draft GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.event_name == 'create' && github.ref || github.ref_name }}
+        run: |
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" release-assets/* --clobber
+          else
+            gh release create "$TAG_NAME" release-assets/* --draft --generate-notes --title "$TAG_NAME"
+          fi

@@ -13,12 +13,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hexbytedev/pihole-guard/internal/deghost"
-	"github.com/hexbytedev/pihole-guard/internal/detector"
-	"github.com/hexbytedev/pihole-guard/internal/monitor"
-	"github.com/hexbytedev/pihole-guard/internal/pihole"
-	"github.com/hexbytedev/pihole-guard/internal/somo"
-	"github.com/hexbytedev/pihole-guard/internal/store"
+	"github.com/hexbytedev/hexwall/internal/deghost"
+	"github.com/hexbytedev/hexwall/internal/detector"
+	"github.com/hexbytedev/hexwall/internal/monitor"
+	"github.com/hexbytedev/hexwall/internal/pihole"
+	"github.com/hexbytedev/hexwall/internal/somo"
+	"github.com/hexbytedev/hexwall/internal/store"
 )
 
 const (
@@ -37,7 +37,7 @@ func main() {
 
 func run() int {
 	dbPath := flag.String("db", "", "path to pihole-FTL.db (auto-detected if not set)")
-	guardDB := flag.String("guard-db", "./pihole-guard.db", "path to local guard database")
+	hexwallDB := flag.String("hexwall-db", "./hexwall.db", "path to local hexwall database")
 	mode := flag.String("mode", monitor.ModeWatch, "monitor mode: watch (detect only) or enforce (kill + log)")
 	debug := flag.Bool("debug", false, "enable verbose per-connection scan logging")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -55,9 +55,9 @@ func run() int {
 	}
 
 	resolvedDBPath := strings.TrimSpace(*dbPath)
-	guardDBPath := strings.TrimSpace(*guardDB)
-	if guardDBPath == "" {
-		slog.Error("invalid --guard-db value", "path", *guardDB)
+	hexwallDBPath := strings.TrimSpace(*hexwallDB)
+	if hexwallDBPath == "" {
+		slog.Error("invalid --hexwall-db value", "path", *hexwallDB)
 		return 1
 	}
 
@@ -95,24 +95,24 @@ func run() int {
 		}
 	}()
 
-	// 4. Open the local guard database, creating it if needed.
-	guardStore, err := store.NewStore(guardDBPath)
+	// 4. Open the local hexwall database, creating it if needed.
+	hexwallStore, err := store.NewStore(hexwallDBPath)
 	if err != nil {
-		slog.Error("failed to open guard database", "path", guardDBPath, "err", err)
+		slog.Error("failed to open hexwall database", "path", hexwallDBPath, "err", err)
 		return 1
 	}
 	defer func() {
-		if err := guardStore.Close(); err != nil {
-			slog.Error("failed to close guard database", "err", err)
+		if err := hexwallStore.Close(); err != nil {
+			slog.Error("failed to close hexwall database", "err", err)
 		}
 	}()
 
-	slog.Info("guard database ready", "path", guardDBPath)
+	slog.Info("hexwall database ready", "path", hexwallDBPath)
 
 	deghostClient := deghost.NewClient(deghostBaseURL, deghostTimeout)
 
 	// 5. Refresh trusted IPs before starting the monitor so the first tick does not kill legitimate connections.
-	cache := pihole.NewIPCache(checker, guardStore)
+	cache := pihole.NewIPCache(checker, hexwallStore)
 	cache.Refresh(ctx)
 
 	// 6. Keep the trusted-IP cache fresh in the background without re-running the startup refresh immediately.
@@ -146,7 +146,7 @@ func run() int {
 			slog.Info("shutting down")
 			return 0
 		case <-ticker.C:
-			monitor.RunScan(ctx, guardStore, deghostClient, selectedMode, *debug)
+			monitor.RunScan(ctx, hexwallStore, deghostClient, selectedMode, *debug)
 		}
 	}
 }

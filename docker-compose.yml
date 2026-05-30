@@ -1,9 +1,9 @@
-name: pihole
+name: hexwall
 services:
-  pihole_guard:
+  hexwall_app:
     # trixie is required for GLIBC_2.39
     image: golang:1.26.3-trixie
-    container_name: pihole_guard
+    container_name: hexwall_app
     working_dir: /app
     restart: unless-stopped
     environment:
@@ -19,17 +19,17 @@ services:
     security_opt:
       - apparmor=unconfined
     entrypoint:
-      - /app/guard
+      - /app/hexwall
     command:
       - --db
       - /etc/pihole/pihole-FTL.db
-      - --guard-db
-      - /app/pihole-guard.db
+      - --hexwall-db
+      - /app/hexwall.db
       - --mode
-      - ${PIHOLE_GUARD_MODE:-watch}
+      - ${HEXWALL_GUARD_MODE:-watch}
     volumes:
       - ./app:/app
       - ${SOMO_BINARY:-/usr/local/bin/somo}:/usr/local/bin/somo:ro
       - ${PIHOLE_DB_DIR:-/etc/pihole}:/etc/pihole:ro
 
-# ./guard --guard-db pihole-guard.db --db /etc/pihole/pihole-FTL.db --mode watch -debug
+# ./hexwall --hexwall-db hexwall.db --db /etc/pihole/pihole-FTL.db --mode watch -debug

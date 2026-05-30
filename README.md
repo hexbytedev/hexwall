@@ -1,4 +1,4 @@
-# pihole-guard
+# hexwall
 
 [![Go Reference][1]][2]
 [![CodeQL Advanced][3]][4]
@@ -8,15 +8,15 @@
 [![Dependabot Updates][11]][12]
 [![Go][13]][14]
 
-`pihole-guard` is an outbound exfiltration brake for servers already protected by Pi-hole. When a supply-chain attack, malware implant, or compromised package is already running inside the machine, it can skip DNS entirely and send stolen data straight to a hard-coded IP. Pi-hole does not see that hop. `somo` can see the live connection. `pihole-guard` uses that visibility to flag and, in `enforce` mode, kill suspicious direct-IP connections before data leaves the server.
+`hexwall` is an outbound exfiltration brake for servers already protected by Pi-hole. When a supply-chain attack, malware implant, or compromised package is already running inside the machine, it can skip DNS entirely and send stolen data straight to a hard-coded IP. Pi-hole does not see that hop. `somo` can see the live connection. `hexwall` uses that visibility to flag and, in `enforce` mode, kill suspicious direct-IP connections before data leaves the server.
 
 It monitors active network connections and kills any that connect to IPs that are not trusted by Pi-hole history, the built-in local allowlist, or recent already-established traffic — closing the gap that Pi-hole leaves open for direct-IP connections.
 
-In short: `Pi-hole + somo + pihole-guard` gives you a practical containment layer for post-compromise outbound traffic, especially the kind of direct-IP exfiltration occasionally used in supply-chain attacks.
+In short: `Pi-hole + somo + hexwall` gives you a practical containment layer for post-compromise outbound traffic, especially the kind of direct-IP exfiltration occasionally used in supply-chain attacks.
 
 ## At a glance
 
-| Situation | Server without Pi-hole DNS | Server with only Pi-hole | Server with Pi-hole + somo + pihole-guard |
+| Situation | Server without Pi-hole DNS | Server with only Pi-hole | Server with Pi-hole + somo + hexwall |
 | --- | --- | --- | --- |
 | Malicious domain resolved over DNS | ❌ Exposed | ✅ Can block at DNS layer | ✅ Can block at DNS layer |
 | Malware connects to a hard-coded IP directly | ❌ Exposed | ❌ Pi-hole does not see it | ✅ Direct-IP connection is visible and checked |
@@ -31,7 +31,7 @@ In short: `Pi-hole + somo + pihole-guard` gives you a practical containment laye
 
 Pi-hole operates at the DNS layer. It can block a domain, but it has no visibility into connections that bypass DNS entirely — processes that dial a hard-coded IP address directly. Malware and compromised packages commonly use this technique to phone home without triggering any DNS-based block.
 
-pihole-guard works from the inverse assumption: **if an IP is not trusted, the connection is suspicious by default.** Trust is granted when the IP matches the built-in CIDR allowlist, was refreshed from Pi-hole query history within the last hour, or was already observed as an established connection within the last 60 seconds. On startup it immediately refreshes trusted IPs from Pi-hole, then refreshes them every 30 seconds while scanning connections every 10 seconds. Anything that falls outside that trust set is checked against an external fraud API, with results cached locally for 6 hours per IP. Confirmed threats are either logged (watch mode) or killed (enforce mode).
+hexwall works from the inverse assumption: **if an IP is not trusted, the connection is suspicious by default.** Trust is granted when the IP matches the built-in CIDR allowlist, was refreshed from Pi-hole query history within the last hour, or was already observed as an established connection within the last 60 seconds. On startup it immediately refreshes trusted IPs from Pi-hole, then refreshes them every 30 seconds while scanning connections every 10 seconds. Anything that falls outside that trust set is checked against an external fraud API, with results cached locally for 6 hours per IP. Confirmed threats are either logged (watch mode) or killed (enforce mode).
 
 ---
 
@@ -54,9 +54,9 @@ CI publishes lightweight Linux binaries for:
 
 You can download them from the project's GitHub Releases page:
 
-- [GitHub Releases](https://github.com/hexbytedev/pihole-guard/releases)
+- [GitHub Releases](https://github.com/hexbytedev/hexwall/releases)
 
-For production Linux servers, download the matching binary from Releases, place it where your deployment expects `./app/guard`, and use the included demo Docker Compose file at [`docker-compose.yml`](./docker-compose.yml) to launch it on the server.
+For production Linux servers, download the matching binary from Releases, place it where your deployment expects `./app/hexwall`, and use the included demo Docker Compose file at [`docker-compose.yml`](./docker-compose.yml) to launch it on the server.
 
 For macOS and Windows, prebuilt binaries are not published by CI. Clone the repository and build the binary manually before deployment.
 
@@ -98,7 +98,7 @@ If neither is found, start fails. Use `--db` to specify the path manually.
 | Flag         | Default             | Description                                                      |
 | ------------ | ------------------- | ---------------------------------------------------------------- |
 | `--db`       | _(auto-detected)_   | Path to `pihole-FTL.db`                                          |
-| `--guard-db` | `./pihole-guard.db` | Path to the local guard database (created on first run)          |
+|`--hexwall-db`| `./hexwall.db`      | Path to the local hexwall database (created on first run)        |
 | `--mode`     | `watch`             | `watch` — detect and log only; `enforce` — detect, log, and kill |
 | `--debug`    | `false`             | Enable verbose per-connection scan logging                       |
 
@@ -141,19 +141,19 @@ Connections are not killed in these cases:
 - The fraud API returns a report but none of `is_abuser`, `is_attacker`, or `is_threat` are true.
 - The fraud lookup itself fails.
 
-When a kill does happen, pihole-guard first records the event in the local `killed_connections` audit table and then asks `somo` to kill the owning PID.
+When a kill does happen, hexwall first records the event in the local `killed_connections` audit table and then asks `somo` to kill the owning PID.
 
 ### Fraud API cache behavior
 
 Fraud lookups are cached in the local SQLite database for 6 hours per IP.
 
-- If an untrusted IP has a cached fraud decision newer than 6 hours, pihole-guard reuses that cached result and does not call the fraud API again.
+- If an untrusted IP has a cached fraud decision newer than 6 hours, hexwall reuses that cached result and does not call the fraud API again.
 - If the cached decision is older than 6 hours, the next scan calls the fraud API again and refreshes the cache timestamp.
 - Both clean and kill-worthy fraud decisions are cached.
 - HTTP `403` responses are treated as clean/private/reserved and cached as a non-kill result.
 - Fraud lookup failures are not cached.
 
-This cache lives in the local guard database as Unix timestamps (`INTEGER` / int64-style seconds) and survives restarts.
+This cache lives in the local hexwall database as Unix timestamps (`INTEGER` / int64-style seconds) and survives restarts.
 
 ---
 
@@ -187,17 +187,17 @@ If a domain was seen in Pi-hole history but no longer resolves during refresh, n
 
 ---
 
-[1]: https://pkg.go.dev/badge/github.com/hexbytedev/pihole-guard
-[2]: https://pkg.go.dev/github.com/hexbytedev/pihole-guard
-[3]: https://github.com/hexbytedev/pihole-guard/actions/workflows/codeql.yml/badge.svg
-[4]: https://github.com/hexbytedev/pihole-guard/actions/workflows/codeql.yml
-[5]: https://github.com/hexbytedev/pihole-guard/actions/workflows/golangci-lint.yml/badge.svg
-[6]: https://github.com/hexbytedev/pihole-guard/actions/workflows/golangci-lint.yml
-[7]: https://github.com/hexbytedev/pihole-guard/actions/workflows/dependency-review.yml/badge.svg
-[8]: https://github.com/hexbytedev/pihole-guard/actions/workflows/dependency-review.yml
-[9]: https://github.com/hexbytedev/pihole-guard/actions/workflows/dependabot/update-graph/badge.svg
-[10]: https://github.com/hexbytedev/pihole-guard/actions/workflows/dependabot/update-graph
-[11]: https://github.com/hexbytedev/pihole-guard/actions/workflows/dependabot/dependabot-updates/badge.svg
-[12]: https://github.com/hexbytedev/pihole-guard/actions/workflows/dependabot/dependabot-updates
-[13]: https://github.com/hexbytedev/pihole-guard/actions/workflows/go.yml/badge.svg
-[14]: https://github.com/hexbytedev/pihole-guard/actions/workflows/go.yml
+[1]: https://pkg.go.dev/badge/github.com/hexbytedev/hexwall
+[2]: https://pkg.go.dev/github.com/hexbytedev/hexwall
+[3]: https://github.com/hexbytedev/hexwall/actions/workflows/codeql.yml/badge.svg
+[4]: https://github.com/hexbytedev/hexwall/actions/workflows/codeql.yml
+[5]: https://github.com/hexbytedev/hexwall/actions/workflows/golangci-lint.yml/badge.svg
+[6]: https://github.com/hexbytedev/hexwall/actions/workflows/golangci-lint.yml
+[7]: https://github.com/hexbytedev/hexwall/actions/workflows/dependency-review.yml/badge.svg
+[8]: https://github.com/hexbytedev/hexwall/actions/workflows/dependency-review.yml
+[9]: https://github.com/hexbytedev/hexwall/actions/workflows/dependabot/update-graph/badge.svg
+[10]: https://github.com/hexbytedev/hexwall/actions/workflows/dependabot/update-graph
+[11]: https://github.com/hexbytedev/hexwall/actions/workflows/dependabot/dependabot-updates/badge.svg
+[12]: https://github.com/hexbytedev/hexwall/actions/workflows/dependabot/dependabot-updates
+[13]: https://github.com/hexbytedev/hexwall/actions/workflows/go.yml/badge.svg
+[14]: https://github.com/hexbytedev/hexwall/actions/workflows/go.yml

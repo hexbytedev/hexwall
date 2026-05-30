@@ -1,4 +1,4 @@
-module github.com/hexbytedev/pihole-guard
+module github.com/hexbytedev/hexwall
 
 go 1.26.0
 

@@ -1,6 +1,6 @@
 ---
 name: Pull request
-about: Submit a pull request for pihole-guard
+about: Submit a pull request for hexwall
 title: ''
 labels: ''
 assignees: ''

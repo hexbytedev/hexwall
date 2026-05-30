@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hexbytedev/pihole-guard/internal/store"
+	"github.com/hexbytedev/hexwall/internal/store"
 )
 
 const (

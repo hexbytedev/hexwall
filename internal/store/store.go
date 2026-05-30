@@ -1,4 +1,4 @@
-// Package store manages the local pihole-guard SQLite database.
+// Package store manages the local hexwall SQLite database.
 // Unlike the Pi-hole DB, this database is owned by the tool
 // and persists trusted IPs and kill logs across restarts.
 package store
@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"time"
 
-	// Register the pure-Go SQLite driver used for the local guard database.
+	// Register the pure-Go SQLite driver used for the local hexwall database.
 	_ "modernc.org/sqlite"
 )
 
@@ -51,22 +51,22 @@ type FraudCheckCacheEntry struct {
 	CheckedAt  int64
 }
 
-// Store wraps the local guard database.
+// Store wraps the local hexwall database.
 type Store struct {
 	readWrite *sql.DB
 	readOnly  *sql.DB
 }
 
-// NewStore opens or creates the guard database at dbPath and applies the schema.
+// NewStore opens or creates the hexwall database at dbPath and applies the schema.
 func NewStore(dbPath string) (*Store, error) {
 	readWrite, err := sql.Open("sqlite", sqliteDSN(dbPath, "rwc"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to open guard db: %w", err)
+		return nil, fmt.Errorf("failed to open hexwall db: %w", err)
 	}
 
 	if err := configureConnection(readWrite, false); err != nil {
 		_ = readWrite.Close()
-		return nil, fmt.Errorf("failed to connect to guard db: %w", err)
+		return nil, fmt.Errorf("failed to connect to hexwall db: %w", err)
 	}
 
 	if _, err := readWrite.Exec(schema); err != nil {
@@ -77,13 +77,13 @@ func NewStore(dbPath string) (*Store, error) {
 	readOnly, err := sql.Open("sqlite", sqliteDSN(dbPath, "ro"))
 	if err != nil {
 		_ = readWrite.Close()
-		return nil, fmt.Errorf("failed to open guard db read-only connection: %w", err)
+		return nil, fmt.Errorf("failed to open hexwall db read-only connection: %w", err)
 	}
 
 	if err := configureConnection(readOnly, true); err != nil {
 		_ = readOnly.Close()
 		_ = readWrite.Close()
-		return nil, fmt.Errorf("failed to connect to guard db read-only connection: %w", err)
+		return nil, fmt.Errorf("failed to connect to hexwall db read-only connection: %w", err)
 	}
 
 	return &Store{readWrite: readWrite, readOnly: readOnly}, nil

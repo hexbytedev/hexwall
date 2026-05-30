@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an improvement for pihole-guard
+about: Suggest an improvement for hexwall
 title: '[feature]'
 labels: ''
 assignees: ''

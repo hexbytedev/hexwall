@@ -124,7 +124,7 @@ jobs:
             ext=".exe"
           fi
 
-          output="dist/pihole-guard_v${safe_tag}_${GOOS}_${GOARCH}${ext}"
+          output="dist/hexwall_v${safe_tag}_${GOOS}_${GOARCH}${ext}"
           go build -trimpath -ldflags="-s -w -X main.version=v${version_tag} -X main.platform=${GOOS}/${GOARCH}" -o "$output" .
 
       - name: Upload release artifact

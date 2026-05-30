@@ -1,4 +1,4 @@
-// Package monitor scans active network connections against the guard store.
+// Package monitor scans active network connections against the hexwall store.
 // It logs or kills untrusted connections based on the selected mode.
 package monitor
 
@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hexbytedev/pihole-guard/internal/allowlist"
-	"github.com/hexbytedev/pihole-guard/internal/deghost"
-	"github.com/hexbytedev/pihole-guard/internal/somo"
-	"github.com/hexbytedev/pihole-guard/internal/store"
+	"github.com/hexbytedev/hexwall/internal/allowlist"
+	"github.com/hexbytedev/hexwall/internal/deghost"
+	"github.com/hexbytedev/hexwall/internal/somo"
+	"github.com/hexbytedev/hexwall/internal/store"
 )
 
 const (
@@ -67,9 +67,9 @@ func logScanConnection(debug bool, ip, program, status string) {
 }
 
 // RunScan inspects established connections and applies the selected trust and kill policy.
-func RunScan(ctx context.Context, guardStore *store.Store, deghostClient *deghost.Client, mode string, debug bool) {
-	if guardStore == nil {
-		slog.Error("scan aborted: nil guard store")
+func RunScan(ctx context.Context, hexwallStore *store.Store, deghostClient *deghost.Client, mode string, debug bool) {
+	if hexwallStore == nil {
+		slog.Error("scan aborted: nil hexwall store")
 		return
 	}
 	if deghostClient == nil {
@@ -110,7 +110,7 @@ func RunScan(ctx context.Context, guardStore *store.Store, deghostClient *deghos
 			continue
 		}
 
-		allowed, err := guardStore.IsAllowed(ipStr)
+		allowed, err := hexwallStore.IsAllowed(ipStr)
 		if err != nil {
 			slog.Error("store lookup failed", "address", conn.RAddress, "err", err)
 			continue
@@ -119,13 +119,13 @@ func RunScan(ctx context.Context, guardStore *store.Store, deghostClient *deghos
 		if allowed {
 			logScanConnection(debug, ipStr, conn.Program, "allowed")
 			// Keep long-running connections trusted after their Pi-hole refresh window expires.
-			if err := guardStore.UpdateEstablished(ipStr); err != nil {
+			if err := hexwallStore.UpdateEstablished(ipStr); err != nil {
 				slog.Error("failed to update established", "address", conn.RAddress, "err", err)
 			}
 			continue
 		}
 
-		cachedFraudCheck, err := guardStore.GetRecentFraudCheck(ipStr)
+		cachedFraudCheck, err := hexwallStore.GetRecentFraudCheck(ipStr)
 		if err != nil {
 			slog.Error("fraud cache lookup failed", "ip", ipStr, "program", conn.Program, "err", err)
 			continue
@@ -145,7 +145,7 @@ func RunScan(ctx context.Context, guardStore *store.Store, deghostClient *deghos
 				continue
 			}
 
-			if err := guardStore.LogKill(ipStr, conn.PID, conn.Program); err != nil {
+			if err := hexwallStore.LogKill(ipStr, conn.PID, conn.Program); err != nil {
 				slog.Error("failed to log kill", "address", conn.RAddress, "err", err)
 			}
 			if err := somo.KillConnection(conn.PID); err != nil {
@@ -163,7 +163,7 @@ func RunScan(ctx context.Context, guardStore *store.Store, deghostClient *deghos
 		}
 
 		if report == nil {
-			if err := guardStore.UpsertFraudCheck(ipStr, false); err != nil {
+			if err := hexwallStore.UpsertFraudCheck(ipStr, false); err != nil {
 				slog.Error("failed to cache fraud check", "ip", ipStr, "program", conn.Program, "err", err)
 			}
 			slog.Info("unrecognized but clean ip", "ip", ipStr, "program", conn.Program, "reason", "403/private-or-reserved")
@@ -172,7 +172,7 @@ func RunScan(ctx context.Context, guardStore *store.Store, deghostClient *deghos
 		}
 
 		shouldKill := deghost.ShouldKill(report)
-		if err := guardStore.UpsertFraudCheck(ipStr, shouldKill); err != nil {
+		if err := hexwallStore.UpsertFraudCheck(ipStr, shouldKill); err != nil {
 			slog.Error("failed to cache fraud check", "ip", ipStr, "program", conn.Program, "err", err)
 		}
 
@@ -190,7 +190,7 @@ func RunScan(ctx context.Context, guardStore *store.Store, deghostClient *deghos
 			continue
 		}
 
-		if err := guardStore.LogKill(ipStr, conn.PID, conn.Program); err != nil {
+		if err := hexwallStore.LogKill(ipStr, conn.PID, conn.Program); err != nil {
 			slog.Error("failed to log kill", "address", conn.RAddress, "err", err)
 		}
 		if err := somo.KillConnection(conn.PID); err != nil {

@@ -130,7 +130,6 @@ func (c *Checker) DomainsSeenSince(since int64) ([]string, error) {
 			return nil, fmt.Errorf("scan failed: %w", err)
 		}
 
-		// The query already canonicalizes domains, but keep the append guard local.
 		if domain == "" {
 			continue
 		}

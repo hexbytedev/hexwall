@@ -1,5 +1,5 @@
-rm guard
+rm hexwall
 
-go build -o guard
+go build -o hexwall
 
-./guard -guard-db pihole-guard.db -debug
+./hexwall -hexwall-db hexwall.db -debug

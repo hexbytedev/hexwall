@@ -5,7 +5,7 @@
 *.bak
 vendor/
 guard
-pihole-guard*
+hexwall*
 tmp
 .vscode
 coverage.txt

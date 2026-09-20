@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -22,13 +22,18 @@ const (
 type IPCache struct {
 	checker *Checker
 	store   *store.Store
+
+	domainsSeenSince func(int64) ([]string, error)
+	lookupHost       func(context.Context, string) ([]string, error)
 }
 
 // NewIPCache creates an IPCache backed by the given Checker and Store.
 func NewIPCache(checker *Checker, store *store.Store) *IPCache {
 	return &IPCache{
-		checker: checker,
-		store:   store,
+		checker:          checker,
+		store:            store,
+		domainsSeenSince: checker.DomainsSeenSince,
+		lookupHost:       net.DefaultResolver.LookupHost,
 	}
 }
 
@@ -41,7 +46,7 @@ func (c *IPCache) Refresh(ctx context.Context) {
 
 	since := time.Now().Add(-refreshLookback).Unix()
 
-	domains, err := c.checker.DomainsSeenSince(since)
+	domains, err := c.domainsSeenSince(since)
 	if err != nil {
 		slog.Error("cache refresh: failed to query pi-hole domains", "err", err)
 		return
@@ -51,7 +56,7 @@ func (c *IPCache) Refresh(ctx context.Context) {
 		return
 	}
 
-	sort.Strings(domains)
+	slices.Sort(domains)
 
 	sem := make(chan struct{}, maxConcurrentLookups)
 
@@ -62,12 +67,14 @@ func (c *IPCache) Refresh(ctx context.Context) {
 	resolved := make(map[string][]string, len(domains))
 
 	var wg sync.WaitGroup
-spawnLoop:
 	for _, domain := range domains {
 		select {
 		case <-ctx.Done():
-			break spawnLoop
 		case sem <- struct{}{}:
+		}
+
+		if ctx.Err() != nil {
+			break
 		}
 
 		wg.Add(1)
@@ -78,7 +85,7 @@ spawnLoop:
 			rctx, cancel := context.WithTimeout(ctx, lookupTimeout)
 			defer cancel()
 
-			ips, err := net.DefaultResolver.LookupHost(rctx, d)
+			ips, err := c.lookupHost(rctx, d)
 			if err != nil {
 				// DNS failure is normal for blocked domains, expired records, and similar cases.
 				return

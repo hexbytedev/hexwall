@@ -23,19 +23,26 @@ const (
 //
 // Returns an error if neither is found.
 func FindDBPath() (string, error) {
+	return findDBPath(physicalDBPath, findDockerDBPath)
+}
+
+// findDBPath is FindDBPath's logic with the physical path and Docker fallback
+// injectable, so tests can exercise both branches without touching
+// /etc/pihole or requiring a real Docker daemon.
+func findDBPath(physicalPath string, dockerFallback func() (string, error)) (string, error) {
 	// Check the default host installation first.
-	if err := validateDBFile(physicalDBPath); err == nil {
-		return physicalDBPath, nil
+	if err := validateDBFile(physicalPath); err == nil {
+		return physicalPath, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("failed to access physical pi-hole DB at %s: %w", physicalDBPath, err)
+		return "", fmt.Errorf("failed to access physical pi-hole DB at %s: %w", physicalPath, err)
 	}
 
 	// Fall back to a running Docker installation.
-	path, err := findDockerDBPath()
+	path, err := dockerFallback()
 	if err != nil {
 		return "", fmt.Errorf(
 			"pi-hole not found: no physical installation at %s and no running pi-hole Docker container (%w)",
-			physicalDBPath, err,
+			physicalPath, err,
 		)
 	}
 

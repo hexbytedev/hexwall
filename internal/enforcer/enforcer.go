@@ -12,8 +12,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"syscall"
-	"time"
 )
 
 // protectedPrograms is the default set of programs that must never be killed.
@@ -55,6 +53,9 @@ func isProtected(name string) bool {
 //   - Refuses any PID <= 0.
 //   - Refuses protected programs (case-insensitive match).
 //   - Sends SIGTERM first, waits a grace period, then SIGKILL if still alive.
+//
+// The actual signal-sending is platform-specific; see terminate in
+// enforcer_unix.go / enforcer_windows.go.
 func KillProcess(pid int, program string, remoteAddr string) error {
 	if pid <= 0 {
 		return fmt.Errorf("invalid PID %d", pid)
@@ -74,28 +75,7 @@ func KillProcess(pid int, program string, remoteAddr string) error {
 
 	slog.Warn("killing connection", "pid", pid, "program", program, "address", remoteAddr)
 
-	// SIGTERM first — allows graceful shutdown.
-	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
-		return fmt.Errorf("send SIGTERM to PID %d: %w", pid, err)
-	}
-
-	// Grace period: wait up to 2 seconds for the process to exit.
-	time.Sleep(2 * time.Second)
-
-	// Check whether the process still exists.
-	if err := syscall.Kill(pid, 0); err != nil {
-		// Process is gone — SIGTERM worked.
-		slog.Info("process terminated by SIGTERM", "pid", pid, "program", program)
-		return nil
-	}
-
-	// Process still alive — escalate to SIGKILL.
-	slog.Warn("process survived SIGTERM, sending SIGKILL", "pid", pid, "program", program)
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-		return fmt.Errorf("send SIGKILL to PID %d: %w", pid, err)
-	}
-
-	return nil
+	return terminate(pid, program)
 }
 
 // ParsePID converts a string PID to int, returning an error for invalid input.

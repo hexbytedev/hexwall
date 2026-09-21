@@ -31,17 +31,20 @@ In short: `Pi-hole + somo + hexwall` gives you a practical containment layer for
 
 Pi-hole operates at the DNS layer. It can block a domain, but it has no visibility into connections that bypass DNS entirely — processes that dial a hard-coded IP address directly. Malware and compromised packages commonly use this technique to phone home without triggering any DNS-based block.
 
-hexwall works from the inverse assumption: **if an IP is not trusted, the connection is suspicious by default.** Trust is granted when the IP matches the built-in CIDR allowlist, was refreshed from Pi-hole query history within the last hour, or was already observed as an established connection within the last 60 seconds. On startup it immediately refreshes trusted IPs from Pi-hole, then refreshes them every 30 seconds while scanning connections every 10 seconds. Anything that falls outside that trust set is checked against an external fraud API, with results cached locally for 6 hours per IP. Confirmed threats are either logged (watch mode) or killed (enforce mode).
+hexwall works from the inverse assumption: **if a connection is not trusted, it is suspicious by default.** Trust is granted when the IP matches the built-in CIDR allowlist, was refreshed from Pi-hole query history within the last hour, or was already observed as an established connection within the last 60 seconds. On startup it immediately refreshes trusted IPs from Pi-hole, then refreshes them every 30 seconds while scanning connections every 10 seconds.
+
+When Zeek is enabled (`--zeek-log`), hexwall also captures the TLS SNI for each connection and checks that exact domain against Pi-hole's own allow/deny lists before ever falling back to third-party reputation — this is what lets it tell apart a blocked site from a harmless one even when both happen to share the same IP, as is common behind a CDN. Anything that still falls outside every trust check is optionally escalated to an external reputation API, with results cached locally for 6 hours. Confirmed threats are either logged (watch mode) or killed (enforce mode).
 
 ---
 
 ## Dependencies
 
-| Dependency                                | Role                                                | Required                    |
-| ----------------------------------------- | --------------------------------------------------- | --------------------------- |
-| [`somo`](https://github.com/theopfr/somo) | Lists established TCP/UDP connections; kills by PID | Must be in `$PATH`          |
-| Pi-hole FTL database                      | Source of trusted DNS history                       | Auto-detected or via `--db` |
-| `deghostapi.hexbyte.dev`                  | Fraud/threat classification for unknown IPs         | Network access required     |
+| Dependency                                | Role                                                       | Required                       |
+| ----------------------------------------- | ----------------------------------------------------------- | ------------------------------ |
+| [`somo`](https://github.com/theopfr/somo) | Lists established TCP/UDP connections; kills by PID          | Must be in `$PATH`             |
+| Pi-hole FTL database                      | Source of trusted DNS history and allow/deny policy lists    | Auto-detected or via `--db`    |
+| `deghostapi.hexbyte.dev`                  | Fraud/threat classification for unrecognized IPs and domains | Optional — see `--enable-deghost-*` below |
+| Zeek                                      | Passive capture of TLS SNI (`ssl.log`) and DNS-bypass notices (`notice.log`) | Optional — see `--zeek-*`/`--enable-zeek` below |
 
 **Build dependency:** `modernc.org/sqlite` (pure-Go SQLite, no CGo or system libsqlite3 required).
 
@@ -95,63 +98,67 @@ If neither is found, start fails. Use `--db` to specify the path manually.
 
 ## CLI flags
 
-| Flag         | Default             | Description                                                      |
-| ------------ | ------------------- | ---------------------------------------------------------------- |
-| `--db`       | _(auto-detected)_   | Path to `pihole-FTL.db`                                          |
-|`--hexwall-db`| `./hexwall.db`      | Path to the local hexwall database (created on first run)        |
-| `--mode`     | `watch`             | `watch` — detect and log only; `enforce` — detect, log, and kill |
-| `--debug`    | `false`             | Enable verbose per-connection scan logging                       |
+| Flag                      | Default                              | Description                                                                 |
+| ------------------------- | ------------------------------------- | ---------------------------------------------------------------------------- |
+| `--db`                    | _(auto-detected)_                     | Path to `pihole-FTL.db`                                                      |
+| `--hexwall-db`            | `./hexwall.db`                        | Path to the local hexwall database (created on first run)                    |
+| `--mode`                  | `watch`                               | `watch` — detect and log only; `enforce` — detect, log, and kill              |
+| `--debug`                 | `false`                               | Enable verbose per-connection scan logging                                   |
+| `--enable-zeek`           | `false`                               | Enable the Zeek `notice.log` DNS-bypass alert path (independent of `--zeek-log`) |
+| `--zeek-log`               | _(unset — SNI matching skipped)_      | Path to Zeek's `ssl.log`, used to match a connection's TLS SNI against Pi-hole's allow/deny lists |
+| `--zeek-notice-log`       | `/opt/zeek/logs/current/notice.log`   | Path to Zeek's `notice.log`; only read when `--enable-zeek` is set            |
+| `--enable-deghost-ip`     | `true`                                | Enable third-party IP reputation checks for unrecognized connections with no SNI |
+| `--enable-deghost-domain` | `true`                                | Enable third-party domain reputation checks for unrecognized SNI domains     |
+| `--version`               | `false`                               | Print version and exit                                                       |
 
 `--mode` accepts `watch` or `enforce` (case-insensitive). Any other value exits with an error.
 
+`--enable-zeek` and `--zeek-log` are independent switches for two unrelated Zeek consumers: `--zeek-log` feeds SNI-based domain matching into the main decision ladder, while `--enable-zeek` (plus `--zeek-notice-log`) turns on a separate, standalone DNS-bypass alert path. Either, both, or neither can be set.
+
 ### Debug logging
 
-When `--debug` is enabled, each scan cycle logs every connection it encounters with its status:
+When `--debug` is enabled, hexwall also logs intermediate, non-actionable outcomes it would otherwise stay quiet about — a domain or IP coming back clean from a reputation check, or a check being skipped because its flag is disabled. Warnings, blocks, and kills are always logged regardless of `--debug`.
 
-- **allowed** — IP is in the local trust cache or allowlist
-- **unrecognized-clean** — IP is not in cache, but the fraud API returned a clean verdict (or 403 for private/reserved ranges)
-- **vulnerable** — IP is not in cache, fraud API flagged it as abuser/attacker/threat
-
-When debug is disabled (default), only non-allowed results are logged. Additionally, empty scans (somo returning zero connections) are always logged regardless of debug mode.
+Every scan tick prints a one-line summary regardless of `--debug` — connection count, and how many were trusted, blocked, unknown, or errored — and an empty scan (`somo` returning zero connections) is always logged too.
 
 ---
 
 ## When a connection is killed
 
-A connection is killed only when all of the following are true:
+A connection is only ever killed in `--mode enforce`, for a connection `somo` reports as currently established. Three independent checks can trigger it:
 
-1. `--mode enforce` is active.
-2. `somo` reports the connection as currently established.
-3. The remote IP is not trusted.
-4. The remote IP's current fraud decision, either fetched live or reused from the local 6-hour cache, marks it as `is_abuser`, `is_attacker`, or `is_threat`.
+1. **Pi-hole domain denylist match** — Zeek captured the connection's TLS SNI (via `--zeek-log`) and that domain is on Pi-hole's own denylist or gravity blocklist. Requires only Pi-hole; no third-party service is involved, and this check runs regardless of the `--enable-deghost-*` flags.
+2. **Third-party domain reputation match** — an SNI was captured, the domain is on neither Pi-hole list and isn't already known-trusted for this IP, and the reputation API's verdict (fetched live or reused from a 6-hour cache) says to block it. Requires `--enable-deghost-domain` (default `true`).
+3. **Third-party IP reputation match** — no SNI was available at all (non-TLS traffic, ECH, or a connection predating startup), the IP is not trusted, and the reputation API's verdict on the bare IP (live or 6-hour cached) marks it `is_abuser`, `is_attacker`, or `is_threat`. Requires `--enable-deghost-ip` (default `true`).
 
-An IP is considered trusted when any of these are true:
+With both `--enable-deghost-ip` and `--enable-deghost-domain` set to `false`, only the first check — Pi-hole's own denylist — can ever trigger a kill.
 
-- It matches the built-in CIDR allowlist.
-- It was refreshed from Pi-hole history within the last hour.
-- It was already seen as an established allowed connection within the last 60 seconds.
+A connection is treated as trusted, and skipped entirely, when any of these are true:
+
+- Its IP matches the built-in CIDR allowlist.
+- Its domain is explicitly on Pi-hole's allowlist.
+- Its IP was refreshed from Pi-hole query history within the last hour, or was already seen as an established connection within the last 60 seconds.
+- Its domain has already been seen for this exact IP in hexwall's own history.
 
 Connections are not killed in these cases:
 
-- `--mode watch` is active. The connection is only logged as `would kill`.
-- The IP is on the built-in allowlist.
-- The IP is still trusted from a recent Pi-hole refresh or recent established-connection activity.
-- The IP already has a cached clean fraud verdict from the last 6 hours.
-- The fraud API returns HTTP `403`, which is treated as clean/private/reserved.
-- The fraud API returns a report but none of `is_abuser`, `is_attacker`, or `is_threat` are true.
-- The fraud lookup itself fails.
+- `--mode watch` is active — a would-be kill is only logged as `would kill`.
+- The relevant reputation check is disabled via its flag.
+- A cached reputation verdict from the last 6 hours says clean.
+- The IP reputation API returns HTTP `403`, treated as clean/private/reserved.
+- The reputation lookup itself fails — a failed lookup is never treated as a block.
 
-When a kill does happen, hexwall first records the event in the local `killed_connections` audit table and then asks `somo` to kill the owning PID.
+When a kill does happen, hexwall first records the event in the local `killed_connections` audit table, then signals the owning PID: `SIGTERM` first, escalating to `SIGKILL` after a 2-second grace period if the process is still alive. A hardcoded set of protected system processes (`systemd`, `sshd`, `dockerd`, and similar) can never be killed this way, whichever check triggered the match.
 
-### Fraud API cache behavior
+### Reputation API cache behavior
 
-Fraud lookups are cached in the local SQLite database for 6 hours per IP.
+Both IP and domain reputation lookups are cached in the local SQLite database for 6 hours, keyed by IP or by domain respectively.
 
-- If an untrusted IP has a cached fraud decision newer than 6 hours, hexwall reuses that cached result and does not call the fraud API again.
-- If the cached decision is older than 6 hours, the next scan calls the fraud API again and refreshes the cache timestamp.
-- Both clean and kill-worthy fraud decisions are cached.
-- HTTP `403` responses are treated as clean/private/reserved and cached as a non-kill result.
-- Fraud lookup failures are not cached.
+- If a cached decision is newer than 6 hours, hexwall reuses it and does not call the reputation API again.
+- If the cached decision is older than 6 hours, the next scan calls the API again and refreshes the cache timestamp.
+- Both clean and block-worthy decisions are cached.
+- HTTP `403` responses (IP checks only) are treated as clean/private/reserved and cached as a non-kill result.
+- A failed lookup is not cached, so it will be retried on the next scan.
 
 This cache lives in the local hexwall database as Unix timestamps (`INTEGER` / int64-style seconds) and survives restarts.
 

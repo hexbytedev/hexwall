@@ -208,6 +208,30 @@ func run() int {
 		zeekClient = zc
 	}
 
+	// deghost is opt-in: it sends every unrecognized domain to a third-party API,
+	// which is a real privacy cost. Only construct the client when at least one check is enabled.
+	var deghostClient *deghost.Client
+	if cfg.enableDeghostIP || cfg.enableDeghostDomain {
+		deghostClient = deghost.NewClient(deghostBaseURL, deghostTimeout)
+	} else {
+		slog.Info("deghost disabled; unrecognized connections will not be escalated to third-party API")
+	}
+
+	if cfg.mode == monitor.ModeEnforce && cfg.enableDeghostIP {
+		slog.Warn("enforce mode with IP deghost enabled: an external reputation verdict can now terminate a local process; shared cloud provider ranges are known to produce false positives on such feeds")
+	}
+
+	scanner := &monitor.Scanner{
+		Checker:       checker,
+		Store:         hexwallStore,
+		DeghostClient: deghostClient,
+		ZeekClient:    zeekClient,
+		Mode:          cfg.mode,
+		DeghostIP:     cfg.enableDeghostIP,
+		DeghostDomain: cfg.enableDeghostDomain,
+		Debug:         cfg.debug,
+	}
+
 	var zeekEvents = make(chan zeek.Event, 100)
 	if cfg.enableZeek && cfg.zeekNoticeLog != "" {
 		go func() {
@@ -221,23 +245,10 @@ func run() int {
 				case <-ctx.Done():
 					return
 				case event := <-zeekEvents:
-					monitor.HandleZeekEvent(checker, hexwallStore, cfg.mode, event)
+					scanner.HandleZeekEvent(event)
 				}
 			}
 		}()
-	}
-
-	// deghost is opt-in: it sends every unrecognized domain to a third-party API,
-	// which is a real privacy cost. Only construct the client when at least one check is enabled.
-	var deghostClient *deghost.Client
-	if cfg.enableDeghostIP || cfg.enableDeghostDomain {
-		deghostClient = deghost.NewClient(deghostBaseURL, deghostTimeout)
-	} else {
-		slog.Info("deghost disabled; unrecognized connections will not be escalated to third-party API")
-	}
-
-	if cfg.mode == monitor.ModeEnforce && cfg.enableDeghostIP {
-		slog.Warn("enforce mode with IP deghost enabled: an external reputation verdict can now terminate a local process; shared cloud provider ranges are known to produce false positives on such feeds")
 	}
 
 	// 5. Refresh trusted IPs before starting the monitor so the first tick does not kill legitimate connections.
@@ -299,7 +310,7 @@ func run() int {
 			slog.Info("shutting down")
 			return 0
 		case <-ticker.C:
-			monitor.RunScan(ctx, checker, hexwallStore, deghostClient, cfg.enableDeghostIP, cfg.enableDeghostDomain, zeekClient, cfg.mode, cfg.debug)
+			scanner.Run(ctx)
 		}
 	}
 }

@@ -26,6 +26,21 @@ const (
 	ModeEnforce = "enforce"
 )
 
+// Scanner holds the long-lived collaborators and configuration flags the
+// decision ladder needs. Construct it with a struct literal — every field is
+// a plain dependency or flag with nothing to validate, so there's no
+// NewScanner constructor.
+type Scanner struct {
+	Checker       *pihole.Checker
+	Store         *store.Store
+	DeghostClient *deghost.Client
+	ZeekClient    *zeek.Client
+	Mode          string
+	DeghostIP     bool
+	DeghostDomain bool
+	Debug         bool
+}
+
 // scanSummary tracks per-scan outcome counts for the summary line.
 type scanSummary struct {
 	connections int
@@ -74,16 +89,16 @@ func remoteIP(address string) (net.IP, error) {
 }
 
 // HandleZeekEvent evaluates a Zeek notice event against the current policy and persists it.
-func HandleZeekEvent(checker *pihole.Checker, hexwallStore *store.Store, mode string, event zeek.Event) {
-	if checker == nil || hexwallStore == nil {
+func (s *Scanner) HandleZeekEvent(event zeek.Event) {
+	if s.Checker == nil || s.Store == nil {
 		return
 	}
 	if event.SNI == "" {
 		return
 	}
 
-	selectedMode := normalizeMode(mode)
-	blocked, err := checker.IsBlockedByPolicy(event.SNI)
+	selectedMode := normalizeMode(s.Mode)
+	blocked, err := s.Checker.IsBlockedByPolicy(event.SNI)
 	if err != nil {
 		slog.Warn("zeek policy lookup failed", "sni", event.SNI, "err", err)
 		return
@@ -98,7 +113,7 @@ func HandleZeekEvent(checker *pihole.Checker, hexwallStore *store.Store, mode st
 		slog.Info("zeek notice was not policy-blocked", "src_ip", event.SrcIP, "dst_ip", event.DstIP, "dst_port", event.DstPort, "sni", event.SNI)
 	}
 
-	if err := hexwallStore.LogZeekAlert(event.SrcIP, event.DstIP, event.DstPort, event.SNI, blocked, confidence, actionTaken); err != nil {
+	if err := s.Store.LogZeekAlert(event.SrcIP, event.DstIP, event.DstPort, event.SNI, blocked, confidence, actionTaken); err != nil {
 		slog.Error("failed to persist zeek alert", "src_ip", event.SrcIP, "sni", event.SNI, "err", err)
 	}
 
@@ -107,7 +122,7 @@ func HandleZeekEvent(checker *pihole.Checker, hexwallStore *store.Store, mode st
 	}
 }
 
-// RunScan inspects established connections and applies the decision ladder.
+// Run inspects established connections and applies the decision ladder.
 //
 // The ladder is ordered from cheapest/most-authoritative to most-expensive/least-authoritative:
 //  1. Static CIDR allowlist (loopback, RFC1918, cloud metadata)
@@ -119,15 +134,15 @@ func HandleZeekEvent(checker *pihole.Checker, hexwallStore *store.Store, mode st
 //  7. IP-only fallback → deghost escalation if enabled; no action if disabled
 //
 // Safety property: with deghost disabled, only rung 4 (Pi-hole blocklist match) can kill.
-func RunScan(ctx context.Context, checker *pihole.Checker, hexwallStore *store.Store, deghostClient *deghost.Client, deghostIP bool, deghostDomain bool, zeekClient *zeek.Client, mode string, debug bool) {
-	if hexwallStore == nil {
+func (s *Scanner) Run(ctx context.Context) {
+	if s.Store == nil {
 		slog.Error("scan aborted: nil hexwall store")
 		return
 	}
 
-	selectedMode := normalizeMode(mode)
-	if selectedMode != mode {
-		slog.Warn("invalid scan mode; defaulting to watch", "mode", mode, "fallback", selectedMode)
+	selectedMode := normalizeMode(s.Mode)
+	if selectedMode != s.Mode {
+		slog.Warn("invalid scan mode; defaulting to watch", "mode", s.Mode, "fallback", selectedMode)
 	}
 
 	connections, err := somo.GetEstablishedConnections()
@@ -164,8 +179,8 @@ func RunScan(ctx context.Context, checker *pihole.Checker, hexwallStore *store.S
 		// Rung 2: did Zeek see an SNI for this connection?
 		var sniDomain string
 		sniFound := false
-		if zeekClient != nil {
-			if domain, ok := zeekClient.Lookup(conn.LPort, ipStr, conn.RPort); ok {
+		if s.ZeekClient != nil {
+			if domain, ok := s.ZeekClient.Lookup(conn.LPort, ipStr, conn.RPort); ok {
 				sniDomain = domain
 				sniFound = true
 				summary.withSNI++
@@ -178,7 +193,7 @@ func RunScan(ctx context.Context, checker *pihole.Checker, hexwallStore *store.S
 
 		if !sniFound {
 			// Rung 7: IP-only fallback — no SNI means non-TLS, pre-existing connection, or ECH.
-			action := evaluateIPOnly(ctx, hexwallStore, deghostClient, deghostIP, ipStr, conn, selectedMode, debug)
+			action := s.evaluateIPOnly(ctx, ipStr, conn)
 			applyOutcome(&summary, action)
 			continue
 		}
@@ -186,7 +201,7 @@ func RunScan(ctx context.Context, checker *pihole.Checker, hexwallStore *store.S
 		domain := strings.ToLower(strings.TrimSpace(sniDomain))
 
 		// Rung 3: Pi-hole explicit allowlist — user intent outranks everything inferred.
-		allowed, err := checker.IsAllowedByPolicy(domain)
+		allowed, err := s.Checker.IsAllowedByPolicy(domain)
 		if err != nil {
 			// Fail-open: if we cannot determine whether a domain is explicitly allowed,
 			// we must not act on a block from rung 4.  Rung 4 is the only rung that can
@@ -194,7 +209,7 @@ func RunScan(ctx context.Context, checker *pihole.Checker, hexwallStore *store.S
 			// incomplete policy data is worse than missing one block.
 			slog.Warn("domain allowlist lookup failed, skipping blocklist check", "domain", domain, "err", err)
 		} else if allowed {
-			if logErr := hexwallStore.LogSNIObservation(ipStr, domain, conn.LPort, store.OutcomePolicyAllowed); logErr != nil {
+			if logErr := s.Store.LogSNIObservation(ipStr, domain, conn.LPort, store.OutcomePolicyAllowed); logErr != nil {
 				slog.Debug("failed to log sni observation", "ip", ipStr, "err", logErr)
 			}
 			summary.trusted++
@@ -203,14 +218,14 @@ func RunScan(ctx context.Context, checker *pihole.Checker, hexwallStore *store.S
 
 		// Rung 4: Pi-hole explicit denylist / gravity — only rung that can kill.
 		if err == nil {
-			if blocked, err := checker.IsBlockedByPolicy(domain); err != nil {
+			if blocked, err := s.Checker.IsBlockedByPolicy(domain); err != nil {
 				slog.Warn("domain denylist lookup failed", "domain", domain, "err", err)
 			} else if blocked {
-				if logErr := hexwallStore.LogSNIObservation(ipStr, domain, conn.LPort, store.OutcomePolicyBlocked); logErr != nil {
+				if logErr := s.Store.LogSNIObservation(ipStr, domain, conn.LPort, store.OutcomePolicyBlocked); logErr != nil {
 					slog.Debug("failed to log sni observation", "ip", ipStr, "err", logErr)
 				}
 				slog.Warn("policy-blocked domain", "domain", domain, "address", conn.RAddress, "pid", conn.PID, "program", conn.Program)
-				applyBlockedOutcome(hexwallStore, selectedMode, ipStr, conn)
+				s.applyBlockedOutcome(ipStr, conn)
 				summary.blocked++
 				continue
 			}
@@ -218,7 +233,7 @@ func RunScan(ctx context.Context, checker *pihole.Checker, hexwallStore *store.S
 
 		// Rung 5: inferred trust from DNS history — scoped to this IP.
 		known := false
-		knownDomains, err := hexwallStore.DomainsForIP(ipStr)
+		knownDomains, err := s.Store.DomainsForIP(ipStr)
 		if err != nil {
 			slog.Debug("sni domain check failed", "domain", domain, "ip", ipStr, "err", err)
 		} else {
@@ -233,7 +248,7 @@ func RunScan(ctx context.Context, checker *pihole.Checker, hexwallStore *store.S
 		if known {
 			outcome = store.OutcomeIPDomainMatch
 		}
-		if logErr := hexwallStore.LogSNIObservation(ipStr, domain, conn.LPort, outcome); logErr != nil {
+		if logErr := s.Store.LogSNIObservation(ipStr, domain, conn.LPort, outcome); logErr != nil {
 			slog.Debug("failed to log sni observation", "ip", ipStr, "err", logErr)
 		}
 
@@ -243,8 +258,8 @@ func RunScan(ctx context.Context, checker *pihole.Checker, hexwallStore *store.S
 		}
 
 		// Rung 6: unknown domain — deghost escalation if enabled.
-		if !deghostDomain {
-			if debug {
+		if !s.DeghostDomain {
+			if s.Debug {
 				slog.Info("unknown domain, deghost disabled; no action", "domain", domain, "ip", ipStr, "program", conn.Program)
 			}
 			summary.unknown++
@@ -253,7 +268,7 @@ func RunScan(ctx context.Context, checker *pihole.Checker, hexwallStore *store.S
 
 		shouldBlock, reason := false, ""
 
-		if cached, err := hexwallStore.GetRecentDomainCheck(domain); err != nil {
+		if cached, err := s.Store.GetRecentDomainCheck(domain); err != nil {
 			slog.Error("domain cache lookup failed", "domain", domain, "err", err)
 			summary.errored++
 			continue
@@ -263,7 +278,7 @@ func RunScan(ctx context.Context, checker *pihole.Checker, hexwallStore *store.S
 		}
 
 		if !shouldBlock && reason == "" {
-			report, err := deghostClient.CheckDomain(ctx, domain)
+			report, err := s.DeghostClient.CheckDomain(ctx, domain)
 			if err != nil {
 				slog.Error("deghost domain check failed", "domain", domain, "program", conn.Program, "err", err)
 				summary.errored++
@@ -272,13 +287,13 @@ func RunScan(ctx context.Context, checker *pihole.Checker, hexwallStore *store.S
 
 			shouldBlock = deghost.ShouldBlockDomain(report)
 			reason = "live-domain-check"
-			if err := hexwallStore.UpsertDomainCheck(domain, shouldBlock); err != nil {
+			if err := s.Store.UpsertDomainCheck(domain, shouldBlock); err != nil {
 				slog.Error("failed to cache domain check", "domain", domain, "program", conn.Program, "err", err)
 			}
 		}
 
 		if !shouldBlock {
-			if debug {
+			if s.Debug {
 				slog.Info("unknown but clean domain", "domain", domain, "ip", ipStr, "program", conn.Program, "reason", reason)
 			}
 			summary.unknown++
@@ -286,7 +301,7 @@ func RunScan(ctx context.Context, checker *pihole.Checker, hexwallStore *store.S
 		}
 
 		slog.Warn("deghost-blocked domain", "domain", domain, "address", conn.RAddress, "pid", conn.PID, "program", conn.Program, "reason", reason)
-		applyBlockedOutcome(hexwallStore, selectedMode, ipStr, conn)
+		s.applyBlockedOutcome(ipStr, conn)
 		summary.blocked++
 	}
 
@@ -297,40 +312,40 @@ func RunScan(ctx context.Context, checker *pihole.Checker, hexwallStore *store.S
 // evaluateIPOnly handles the IP-only fallback path (rung 7) when no SNI is available.
 // It returns "trusted", "blocked", "unknown", or "error".
 // Every exit path records an IP observation before returning.
-func evaluateIPOnly(ctx context.Context, hexwallStore *store.Store, deghostClient *deghost.Client, deghostIP bool, ipStr string, conn somo.Connection, mode string, debug bool) string {
-	allowed, err := hexwallStore.IsAllowed(ipStr)
+func (s *Scanner) evaluateIPOnly(ctx context.Context, ipStr string, conn somo.Connection) string {
+	allowed, err := s.Store.IsAllowed(ipStr)
 	if err != nil {
 		slog.Error("store lookup failed", "address", conn.RAddress, "err", err)
-		if logErr := hexwallStore.LogIPObservation(ipStr, conn.Program, store.OutcomeIPUnknown); logErr != nil {
+		if logErr := s.Store.LogIPObservation(ipStr, conn.Program, store.OutcomeIPUnknown); logErr != nil {
 			slog.Debug("failed to log ip observation", "ip", ipStr, "err", logErr)
 		}
 		return "error"
 	}
 
 	if allowed {
-		if err := hexwallStore.UpdateEstablished(ipStr); err != nil {
+		if err := s.Store.UpdateEstablished(ipStr); err != nil {
 			slog.Error("failed to update established", "address", conn.RAddress, "err", err)
 		}
-		if logErr := hexwallStore.LogIPObservation(ipStr, conn.Program, store.OutcomeIPTrusted); logErr != nil {
+		if logErr := s.Store.LogIPObservation(ipStr, conn.Program, store.OutcomeIPTrusted); logErr != nil {
 			slog.Debug("failed to log ip observation", "ip", ipStr, "err", logErr)
 		}
 		return "trusted"
 	}
 
-	if !deghostIP {
-		if debug {
+	if !s.DeghostIP {
+		if s.Debug {
 			slog.Info("unknown IP, deghost disabled; no action", "ip", ipStr, "program", conn.Program)
 		}
-		if logErr := hexwallStore.LogIPObservation(ipStr, conn.Program, store.OutcomeIPUnknown); logErr != nil {
+		if logErr := s.Store.LogIPObservation(ipStr, conn.Program, store.OutcomeIPUnknown); logErr != nil {
 			slog.Debug("failed to log ip observation", "ip", ipStr, "err", logErr)
 		}
 		return "unknown"
 	}
 
-	cachedFraudCheck, err := hexwallStore.GetRecentFraudCheck(ipStr)
+	cachedFraudCheck, err := s.Store.GetRecentFraudCheck(ipStr)
 	if err != nil {
 		slog.Error("fraud cache lookup failed", "ip", ipStr, "program", conn.Program, "err", err)
-		if logErr := hexwallStore.LogIPObservation(ipStr, conn.Program, store.OutcomeIPUnknown); logErr != nil {
+		if logErr := s.Store.LogIPObservation(ipStr, conn.Program, store.OutcomeIPUnknown); logErr != nil {
 			slog.Debug("failed to log ip observation", "ip", ipStr, "err", logErr)
 		}
 		return "error"
@@ -338,77 +353,77 @@ func evaluateIPOnly(ctx context.Context, hexwallStore *store.Store, deghostClien
 
 	if cachedFraudCheck != nil {
 		if !cachedFraudCheck.ShouldKill {
-			if debug {
+			if s.Debug {
 				slog.Info("unknown but clean IP (cached)", "ip", ipStr, "program", conn.Program)
 			}
-			if logErr := hexwallStore.LogIPObservation(ipStr, conn.Program, store.OutcomeIPUnknown); logErr != nil {
+			if logErr := s.Store.LogIPObservation(ipStr, conn.Program, store.OutcomeIPUnknown); logErr != nil {
 				slog.Debug("failed to log ip observation", "ip", ipStr, "err", logErr)
 			}
 			return "unknown"
 		}
 
 		slog.Warn("deghost-blocked IP (cached)", "address", conn.RAddress, "pid", conn.PID, "program", conn.Program)
-		if logErr := hexwallStore.LogIPObservation(ipStr, conn.Program, store.OutcomeIPBlocked); logErr != nil {
+		if logErr := s.Store.LogIPObservation(ipStr, conn.Program, store.OutcomeIPBlocked); logErr != nil {
 			slog.Debug("failed to log ip observation", "ip", ipStr, "err", logErr)
 		}
-		applyBlockedOutcome(hexwallStore, mode, ipStr, conn)
+		s.applyBlockedOutcome(ipStr, conn)
 		return "blocked"
 	}
 
-	report, err := deghostClient.CheckIP(ctx, ipStr)
+	report, err := s.DeghostClient.CheckIP(ctx, ipStr)
 	if err != nil {
 		slog.Error("deghost check failed", "ip", ipStr, "program", conn.Program, "err", err)
-		if logErr := hexwallStore.LogIPObservation(ipStr, conn.Program, store.OutcomeIPUnknown); logErr != nil {
+		if logErr := s.Store.LogIPObservation(ipStr, conn.Program, store.OutcomeIPUnknown); logErr != nil {
 			slog.Debug("failed to log ip observation", "ip", ipStr, "err", logErr)
 		}
 		return "error"
 	}
 
 	if report == nil {
-		if err := hexwallStore.UpsertFraudCheck(ipStr, false); err != nil {
+		if err := s.Store.UpsertFraudCheck(ipStr, false); err != nil {
 			slog.Error("failed to cache fraud check", "ip", ipStr, "program", conn.Program, "err", err)
 		}
-		if debug {
+		if s.Debug {
 			slog.Info("unknown but clean IP (private/reserved)", "ip", ipStr, "program", conn.Program)
 		}
-		if logErr := hexwallStore.LogIPObservation(ipStr, conn.Program, store.OutcomeIPReserved); logErr != nil {
+		if logErr := s.Store.LogIPObservation(ipStr, conn.Program, store.OutcomeIPReserved); logErr != nil {
 			slog.Debug("failed to log ip observation", "ip", ipStr, "err", logErr)
 		}
 		return "unknown"
 	}
 
 	shouldKill := deghost.ShouldKill(report)
-	if err := hexwallStore.UpsertFraudCheck(ipStr, shouldKill); err != nil {
+	if err := s.Store.UpsertFraudCheck(ipStr, shouldKill); err != nil {
 		slog.Error("failed to cache fraud check", "ip", ipStr, "program", conn.Program, "err", err)
 	}
 
 	if !shouldKill {
-		if debug {
+		if s.Debug {
 			slog.Info("unknown but clean IP", "ip", ipStr, "program", conn.Program)
 		}
-		if logErr := hexwallStore.LogIPObservation(ipStr, conn.Program, store.OutcomeIPUnknown); logErr != nil {
+		if logErr := s.Store.LogIPObservation(ipStr, conn.Program, store.OutcomeIPUnknown); logErr != nil {
 			slog.Debug("failed to log ip observation", "ip", ipStr, "err", logErr)
 		}
 		return "unknown"
 	}
 
 	slog.Warn("deghost-blocked IP", "address", conn.RAddress, "pid", conn.PID, "program", conn.Program)
-	if logErr := hexwallStore.LogIPObservation(ipStr, conn.Program, store.OutcomeIPBlocked); logErr != nil {
+	if logErr := s.Store.LogIPObservation(ipStr, conn.Program, store.OutcomeIPBlocked); logErr != nil {
 		slog.Debug("failed to log ip observation", "ip", ipStr, "err", logErr)
 	}
-	applyBlockedOutcome(hexwallStore, mode, ipStr, conn)
+	s.applyBlockedOutcome(ipStr, conn)
 	return "blocked"
 }
 
 // applyBlockedOutcome enforces the kill/watch policy for a blocked connection.
-func applyBlockedOutcome(hexwallStore *store.Store, mode, ipStr string, conn somo.Connection) {
-	selectedMode := normalizeMode(mode)
+func (s *Scanner) applyBlockedOutcome(ipStr string, conn somo.Connection) {
+	selectedMode := normalizeMode(s.Mode)
 	if selectedMode == ModeWatch {
 		slog.Warn("watch mode: would kill connection", "address", conn.RAddress, "pid", conn.PID, "program", conn.Program)
 		return
 	}
 
-	if err := hexwallStore.LogKill(ipStr, conn.PID, conn.Program); err != nil {
+	if err := s.Store.LogKill(ipStr, conn.PID, conn.Program); err != nil {
 		slog.Error("failed to log kill", "address", conn.RAddress, "err", err)
 	}
 

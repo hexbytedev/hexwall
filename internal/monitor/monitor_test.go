@@ -280,7 +280,8 @@ func TestHandleZeekEventBlockedDomainPersisted(t *testing.T) {
 	hexwallStore, _ := newTestStore(t)
 
 	event := zeek.Event{SrcIP: "10.0.0.5", DstIP: "203.0.113.20", DstPort: "443", SNI: "evil.example.com"}
-	HandleZeekEvent(checker, hexwallStore, ModeWatch, event)
+	scanner := &Scanner{Checker: checker, Store: hexwallStore, Mode: ModeWatch}
+	scanner.HandleZeekEvent(event)
 
 	alert, err := hexwallStore.RecentZeekAlert(event.SrcIP, event.SNI)
 	if err != nil {
@@ -299,7 +300,8 @@ func TestHandleZeekEventUnblockedDomainPersisted(t *testing.T) {
 	hexwallStore, _ := newTestStore(t)
 
 	event := zeek.Event{SrcIP: "10.0.0.5", DstIP: "203.0.113.20", DstPort: "443", SNI: "clean.example.com"}
-	HandleZeekEvent(checker, hexwallStore, ModeWatch, event)
+	scanner := &Scanner{Checker: checker, Store: hexwallStore, Mode: ModeWatch}
+	scanner.HandleZeekEvent(event)
 
 	alert, err := hexwallStore.RecentZeekAlert(event.SrcIP, event.SNI)
 	if err != nil {
@@ -319,9 +321,9 @@ func TestHandleZeekEventNoopCases(t *testing.T) {
 	hexwallStore, _ := newTestStore(t)
 
 	// None of these should panic or write anything.
-	HandleZeekEvent(nil, hexwallStore, ModeWatch, zeek.Event{SNI: "example.com"})
-	HandleZeekEvent(checker, nil, ModeWatch, zeek.Event{SNI: "example.com"})
-	HandleZeekEvent(checker, hexwallStore, ModeWatch, zeek.Event{SrcIP: "10.0.0.1", SNI: ""})
+	(&Scanner{Store: hexwallStore, Mode: ModeWatch}).HandleZeekEvent(zeek.Event{SNI: "example.com"})
+	(&Scanner{Checker: checker, Mode: ModeWatch}).HandleZeekEvent(zeek.Event{SNI: "example.com"})
+	(&Scanner{Checker: checker, Store: hexwallStore, Mode: ModeWatch}).HandleZeekEvent(zeek.Event{SrcIP: "10.0.0.1", SNI: ""})
 }
 
 // ---- applyBlockedOutcome ---------------------------------------------------
@@ -330,7 +332,7 @@ func TestApplyBlockedOutcomeWatchModeNeverLogsKill(t *testing.T) {
 	hexwallStore, dbPath := newTestStore(t)
 
 	conn := somo.Connection{PID: "1", Program: "curl", RAddress: "203.0.113.10:443"}
-	applyBlockedOutcome(hexwallStore, ModeWatch, "203.0.113.10", conn)
+	(&Scanner{Store: hexwallStore, Mode: ModeWatch}).applyBlockedOutcome("203.0.113.10", conn)
 
 	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections`); got != 0 {
 		t.Fatalf("killed_connections count = %d, want 0 in watch mode", got)
@@ -343,7 +345,7 @@ func TestApplyBlockedOutcomeEnforceModeLogsKillBeforeAttemptingIt(t *testing.T) 
 	// PID 1 (init) is guaranteed to be refused by enforcer.KillProcess, but the
 	// audit row must still be written first ("audit survives the kill").
 	conn := somo.Connection{PID: "1", Program: "curl", RAddress: "203.0.113.10:443"}
-	applyBlockedOutcome(hexwallStore, ModeEnforce, "203.0.113.10", conn)
+	(&Scanner{Store: hexwallStore, Mode: ModeEnforce}).applyBlockedOutcome("203.0.113.10", conn)
 
 	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections WHERE ip = ?`, "203.0.113.10"); got != 1 {
 		t.Fatalf("killed_connections count = %d, want 1 even though the kill itself was refused", got)
@@ -354,7 +356,7 @@ func TestApplyBlockedOutcomeInvalidPIDLogsWarningAndReturns(t *testing.T) {
 	hexwallStore, dbPath := newTestStore(t)
 
 	conn := somo.Connection{PID: "not-a-pid", Program: "curl", RAddress: "203.0.113.11:443"}
-	applyBlockedOutcome(hexwallStore, ModeEnforce, "203.0.113.11", conn)
+	(&Scanner{Store: hexwallStore, Mode: ModeEnforce}).applyBlockedOutcome("203.0.113.11", conn)
 
 	// LogKill happens before ParsePID, so the audit row is still written.
 	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections WHERE ip = ?`, "203.0.113.11"); got != 1 {
@@ -374,7 +376,8 @@ func TestEvaluateIPOnlyTrustedIPUpdatesEstablished(t *testing.T) {
 	client := deghost.NewClient(srv.URL, time.Second)
 
 	conn := somo.Connection{Program: "curl", RAddress: "203.0.113.20:443"}
-	got := evaluateIPOnly(context.Background(), hexwallStore, client, true, "203.0.113.20", conn, ModeWatch, false)
+	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: true, Mode: ModeWatch}
+	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.20", conn)
 	if got != "trusted" {
 		t.Fatalf("evaluateIPOnly() = %q, want %q", got, "trusted")
 	}
@@ -390,7 +393,8 @@ func TestEvaluateIPOnlyDeghostDisabledReturnsUnknown(t *testing.T) {
 	client := deghost.NewClient(srv.URL, time.Second)
 
 	conn := somo.Connection{Program: "curl", RAddress: "203.0.113.21:443"}
-	got := evaluateIPOnly(context.Background(), hexwallStore, client, false, "203.0.113.21", conn, ModeWatch, false)
+	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: false, Mode: ModeWatch}
+	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.21", conn)
 	if got != "unknown" {
 		t.Fatalf("evaluateIPOnly() = %q, want %q", got, "unknown")
 	}
@@ -406,7 +410,8 @@ func TestEvaluateIPOnlyCachedCleanReturnsUnknownNoHTTPCall(t *testing.T) {
 	client := deghost.NewClient(srv.URL, time.Second)
 
 	conn := somo.Connection{Program: "curl", RAddress: "203.0.113.22:443"}
-	got := evaluateIPOnly(context.Background(), hexwallStore, client, true, "203.0.113.22", conn, ModeWatch, false)
+	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: true, Mode: ModeWatch}
+	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.22", conn)
 	if got != "unknown" {
 		t.Fatalf("evaluateIPOnly() = %q, want %q", got, "unknown")
 	}
@@ -423,7 +428,8 @@ func TestEvaluateIPOnlyCachedBlockedReturnsBlockedAndKills(t *testing.T) {
 
 	// PID 1 keeps the actual kill attempt safely refused by enforcer guardrails.
 	conn := somo.Connection{PID: "1", Program: "curl", RAddress: "203.0.113.23:443"}
-	got := evaluateIPOnly(context.Background(), hexwallStore, client, true, "203.0.113.23", conn, ModeEnforce, false)
+	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: true, Mode: ModeEnforce}
+	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.23", conn)
 	if got != "blocked" {
 		t.Fatalf("evaluateIPOnly() = %q, want %q", got, "blocked")
 	}
@@ -442,7 +448,8 @@ func TestEvaluateIPOnlyLiveCheckPrivateReservedCachesClean(t *testing.T) {
 
 	hexwallStore, _ := newTestStore(t)
 	conn := somo.Connection{Program: "curl", RAddress: "203.0.113.24:443"}
-	got := evaluateIPOnly(context.Background(), hexwallStore, client, true, "203.0.113.24", conn, ModeWatch, false)
+	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: true, Mode: ModeWatch}
+	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.24", conn)
 	if got != "unknown" {
 		t.Fatalf("evaluateIPOnly() = %q, want %q", got, "unknown")
 	}
@@ -472,7 +479,8 @@ func TestEvaluateIPOnlyLiveCheckShouldKillCachesAndBlocks(t *testing.T) {
 
 	hexwallStore, dbPath := newTestStore(t)
 	conn := somo.Connection{PID: "1", Program: "curl", RAddress: "203.0.113.25:443"}
-	got := evaluateIPOnly(context.Background(), hexwallStore, client, true, "203.0.113.25", conn, ModeEnforce, false)
+	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: true, Mode: ModeEnforce}
+	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.25", conn)
 	if got != "blocked" {
 		t.Fatalf("evaluateIPOnly() = %q, want %q", got, "blocked")
 	}
@@ -495,14 +503,14 @@ func TestEvaluateIPOnlyLiveCheckShouldKillCachesAndBlocks(t *testing.T) {
 // would also break every other store call in the same scan. Not covered here; would
 // require poking store internals from outside its package, which isn't a safe seam.
 
-// ---- RunScan ---------------------------------------------------------------
+// ---- Scanner.Run -------------------------------------------------------------
 
 func TestRunScanZeroConnections(t *testing.T) {
 	installFakeSomo(t, "#!/bin/sh\necho '[]'\n")
 	hexwallStore, _ := newTestStore(t)
 
 	// Must not panic even with nil checker/deghost/zeek dependencies.
-	RunScan(context.Background(), nil, hexwallStore, nil, false, false, nil, ModeWatch, false)
+	(&Scanner{Store: hexwallStore, Mode: ModeWatch}).Run(context.Background())
 }
 
 func TestRunScanAllowlistedConnectionSkipsIPFallback(t *testing.T) {
@@ -511,7 +519,7 @@ echo '[{"proto":"tcp","local_port":"51820","remote_address":"127.0.0.1","remote_
 `)
 	hexwallStore, dbPath := newTestStore(t)
 
-	RunScan(context.Background(), nil, hexwallStore, nil, false, false, nil, ModeWatch, false)
+	(&Scanner{Store: hexwallStore, Mode: ModeWatch}).Run(context.Background())
 
 	// Rung 1 (static allowlist) short-circuits before the IP-only fallback, so
 	// no ip_observations row should exist for a loopback address.
@@ -526,7 +534,7 @@ echo '[{"proto":"tcp","local_port":"1","remote_address":"not-an-ip","remote_port
 `)
 	hexwallStore, dbPath := newTestStore(t)
 
-	RunScan(context.Background(), nil, hexwallStore, nil, false, false, nil, ModeWatch, false)
+	(&Scanner{Store: hexwallStore, Mode: ModeWatch}).Run(context.Background())
 
 	// The second, valid connection must still be processed through the IP-only
 	// fallback despite the first connection's address being unparsable.
@@ -541,14 +549,14 @@ echo '[{"proto":"tcp","local_port":"1","remote_address":"203.0.113.31","remote_p
 `)
 	hexwallStore, dbPath := newTestStore(t)
 
-	RunScan(context.Background(), nil, hexwallStore, nil, false, false, nil, ModeWatch, false)
+	(&Scanner{Store: hexwallStore, Mode: ModeWatch}).Run(context.Background())
 
 	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM ip_observations WHERE ip = ? AND outcome = 'unknown'`, "203.0.113.31"); got != 1 {
 		t.Fatalf("ip_observations unknown count = %d, want 1", got)
 	}
 }
 
-// NOTE on rung 2/3/4 (Zeek SNI -> Pi-hole allow/deny) coverage inside RunScan:
+// NOTE on rung 2/3/4 (Zeek SNI -> Pi-hole allow/deny) coverage inside Scanner.Run:
 // zeek.Client has no exported constructor or seam that lets an external package
 // (monitor_test.go is package monitor, not package zeek) populate its SNI cache
 // without going through the real background tailer, which only polls every 5s

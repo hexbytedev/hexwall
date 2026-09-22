@@ -1,5 +1,6 @@
-// Package somo wraps the somo CLI for monitoring and managing network connections.
-package somo
+// Package connlist lists established network connections via ss (preferred)
+// or somo (fallback) — see SelectBackend.
+package connlist
 
 import (
 	"encoding/json"
@@ -28,6 +29,22 @@ func CheckInstalled() error {
 	}
 
 	return nil
+}
+
+// SelectBackend picks a connection-listing tool by availability: ss
+// (iproute2) first since it needs no extra install on virtually any Linux
+// box, falling back to somo when ss isn't on PATH (e.g. macOS). name is
+// "ss" or "somo", for logging which tool is in effect.
+func SelectBackend() (lister func() ([]Connection, error), name string, err error) {
+	if SSAvailable() {
+		return GetEstablishedConnectionsViaSS, "ss", nil
+	}
+
+	if CheckInstalled() == nil {
+		return GetEstablishedConnections, "somo", nil
+	}
+
+	return nil, "", fmt.Errorf("no connection-listing tool available: install ss (iproute2) or somo (https://github.com/theopfr/somo)")
 }
 
 // GetEstablishedConnections returns a list of established TCP/UDP connections.

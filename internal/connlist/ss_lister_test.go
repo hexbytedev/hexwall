@@ -46,6 +46,25 @@ func TestParseSSOutputRealFixture(t *testing.T) {
 	}
 }
 
+func TestParseSSOutputIPv6(t *testing.T) {
+	// Captured live from a real IPv6 loopback connection: ss brackets IPv6
+	// addresses, unlike its IPv4 output. splitSSAddress's LastIndex(":")
+	// split leaves the brackets in RAddress rather than stripping them —
+	// this is only safe because monitor.remoteIP() strips brackets itself as
+	// a fallback. This test exists to catch it if that ever stops being true.
+	const line = "0      0      [::1]:56328 [::1]:12450 users:((\"nc\",pid=48399,fd=3))\n"
+
+	conns := parseSSOutput(line)
+	if len(conns) != 1 {
+		t.Fatalf("parseSSOutput() len = %d, want 1", len(conns))
+	}
+
+	want := Connection{Protocol: "tcp", LPort: "56328", RAddress: "[::1]", RPort: "12450", Program: "nc", PID: "48399", State: "ESTAB"}
+	if conns[0] != want {
+		t.Fatalf("parseSSOutput()[0] = %+v, want %+v", conns[0], want)
+	}
+}
+
 func TestParseSSOutputUnattributedProcess(t *testing.T) {
 	// ss omits the whole process column when it can't attribute the socket
 	// to a process (e.g. owned by another user without CAP_NET_ADMIN).

@@ -8,19 +8,19 @@
 [![Dependabot Updates][11]][12]
 [![Go][13]][14]
 
-`hexwall` is an outbound exfiltration brake for servers already protected by Pi-hole. When a supply-chain attack, malware implant, or compromised package is already running inside the machine, it can skip DNS entirely and send stolen data straight to a hard-coded IP. Pi-hole does not see that hop. `somo` can see the live connection. `hexwall` uses that visibility to flag and, in `enforce` mode, kill suspicious direct-IP connections before data leaves the server.
+`hexwall` is an outbound exfiltration brake for servers already protected by Pi-hole. When a supply-chain attack, malware implant, or compromised package is already running inside the machine, it can skip DNS entirely and send stolen data straight to a hard-coded IP. Pi-hole does not see that hop. `ss` (falling back to `somo` when unavailable) can see the live connection. `hexwall` uses that visibility to flag and, in `enforce` mode, kill suspicious direct-IP connections before data leaves the server.
 
 It monitors active network connections and kills any that connect to IPs that are not trusted by Pi-hole history, the built-in local allowlist, or recent already-established traffic — closing the gap that Pi-hole leaves open for direct-IP connections.
 
-In short: `Pi-hole + somo + hexwall` gives you a practical containment layer for post-compromise outbound traffic, especially the kind of direct-IP exfiltration occasionally used in supply-chain attacks.
+In short: `Pi-hole + hexwall` gives you a practical containment layer for post-compromise outbound traffic, especially the kind of direct-IP exfiltration occasionally used in supply-chain attacks.
 
 ## At a glance
 
-| Situation                                    | Server without Pi-hole DNS | Server with only Pi-hole              | Server with Pi-hole + somo + hexwall          |
+| Situation                                    | Server without Pi-hole DNS | Server with only Pi-hole              | Server with Pi-hole + hexwall                  |
 | -------------------------------------------- | -------------------------- | ------------------------------------- | --------------------------------------------- |
 | Malicious domain resolved over DNS           | ❌ Exposed                  | ✅ Can block at DNS layer              | ✅ Can block at DNS layer                      |
 | Malware connects to a hard-coded IP directly | ❌ Exposed                  | ❌ Pi-hole does not see it             | ✅ Direct-IP connection is visible and checked |
-| Identify which process owns the connection   | ❌ No built-in visibility   | ❌ No process visibility               | ✅ `somo` shows PID/program                    |
+| Identify which process owns the connection   | ❌ No built-in visibility   | ❌ No process visibility               | ✅ `ss`/`somo` shows PID/program               |
 | Stop outbound exfiltration after compromise  | ❌ No containment layer     | ⚠️ Only if the attacker still uses DNS | ✅ Can kill suspicious established connections |
 | Supply-chain malware bypassing DNS           | ❌ High risk                | ❌ Still exposed                       | ✅ Stronger containment                        |
 | Overall outbound protection posture          | ❌ Weak                     | ⚠️ Partial                             | 🛡️ Strongest of the three                      |
@@ -126,13 +126,13 @@ If neither is found, start fails. Use `--db` to specify the path manually.
 
 When `--debug` is enabled, hexwall also logs intermediate, non-actionable outcomes it would otherwise stay quiet about — a domain or IP coming back clean from a reputation check, or a check being skipped because its flag is disabled. Warnings, blocks, and kills are always logged regardless of `--debug`.
 
-Every scan tick prints a one-line summary regardless of `--debug` — connection count, and how many were trusted, blocked, unknown, or errored — and an empty scan (`somo` returning zero connections) is always logged too.
+Every scan tick prints a one-line summary regardless of `--debug` — connection count, and how many were trusted, blocked, unknown, or errored — and an empty scan (the connection-listing tool returning zero connections) is always logged too.
 
 ---
 
 ## When a connection is killed
 
-A connection is only ever killed in `--mode enforce`, for a connection `somo` reports as currently established. Three independent checks can trigger it:
+A connection is only ever killed in `--mode enforce`, for a connection the active connection-listing tool (`ss` or `somo`) reports as currently established. Three independent checks can trigger it:
 
 1. **Pi-hole domain denylist match** — Zeek captured the connection's TLS SNI (via `--zeek-log`) and that domain is on Pi-hole's own denylist or gravity blocklist. Requires only Pi-hole; no third-party service is involved, and this check runs regardless of the `--enable-deghost-*` flags.
 2. **Third-party domain reputation match** — an SNI was captured, the domain is on neither Pi-hole list and isn't already known-trusted for this IP, and the reputation API's verdict (fetched live or reused from a 6-hour cache) says to block it. Requires `--enable-deghost-domain` (default `true`).

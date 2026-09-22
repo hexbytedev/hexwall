@@ -13,11 +13,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hexbytedev/hexwall/internal/connlist"
 	"github.com/hexbytedev/hexwall/internal/deghost"
 	"github.com/hexbytedev/hexwall/internal/detector"
 	"github.com/hexbytedev/hexwall/internal/monitor"
 	"github.com/hexbytedev/hexwall/internal/pihole"
-	"github.com/hexbytedev/hexwall/internal/somo"
 	"github.com/hexbytedev/hexwall/internal/store"
 	"github.com/hexbytedev/hexwall/internal/zeek"
 )
@@ -117,15 +117,24 @@ func run() int {
 		return 0
 	}
 
+	// Windows is not supported at all, checked before any tool-availability probing.
+	if runtime.GOOS == "windows" {
+		slog.Error("windows is not supported by hexwall")
+		return 1
+	}
+	slog.Info("detected OS", "os", runtime.GOOS)
+
 	// Cancel background work cleanly on Ctrl+C.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// 1. Verify that somo is available before starting any monitoring.
-	if err := somo.CheckInstalled(); err != nil {
-		slog.Error("somo is not installed", "err", err, "tip", "install somo from https://github.com/theopfr/somo")
+	// 1. Pick a connection-listing tool: ss (iproute2) if available, else somo.
+	connectionLister, toolName, err := connlist.SelectBackend()
+	if err != nil {
+		slog.Error("no connection-listing tool available", "err", err)
 		return 1
 	}
+	slog.Info("using connection-listing tool", "tool", toolName)
 
 	// 2. Resolve the Pi-hole database path from --db or auto-detection.
 	if cfg.dbPath == "" {
@@ -222,14 +231,15 @@ func run() int {
 	}
 
 	scanner := &monitor.Scanner{
-		Checker:       checker,
-		Store:         hexwallStore,
-		DeghostClient: deghostClient,
-		ZeekClient:    zeekClient,
-		Mode:          cfg.mode,
-		DeghostIP:     cfg.enableDeghostIP,
-		DeghostDomain: cfg.enableDeghostDomain,
-		Debug:         cfg.debug,
+		Checker:          checker,
+		Store:            hexwallStore,
+		DeghostClient:    deghostClient,
+		ZeekClient:       zeekClient,
+		ConnectionLister: connectionLister,
+		Mode:             cfg.mode,
+		DeghostIP:        cfg.enableDeghostIP,
+		DeghostDomain:    cfg.enableDeghostDomain,
+		Debug:            cfg.debug,
 	}
 
 	var zeekEvents = make(chan zeek.Event, 100)

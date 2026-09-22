@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hexbytedev/hexwall/internal/connlist"
 	"github.com/hexbytedev/hexwall/internal/deghost"
 	"github.com/hexbytedev/hexwall/internal/pihole"
-	"github.com/hexbytedev/hexwall/internal/somo"
 	"github.com/hexbytedev/hexwall/internal/store"
 	"github.com/hexbytedev/hexwall/internal/zeek"
 
@@ -142,7 +142,7 @@ func newTestChecker(t *testing.T, gravitySetup func(db *sql.DB)) *pihole.Checker
 }
 
 // installFakeSomo writes an executable shell script named "somo" into a temp
-// directory and prepends it to PATH, mirroring internal/somo/somo_test.go's helper.
+// directory and prepends it to PATH, mirroring internal/connlist/connlist_test.go's helper.
 func installFakeSomo(t *testing.T, script string) {
 	t.Helper()
 
@@ -331,7 +331,7 @@ func TestHandleZeekEventNoopCases(t *testing.T) {
 func TestApplyBlockedOutcomeWatchModeNeverLogsKill(t *testing.T) {
 	hexwallStore, dbPath := newTestStore(t)
 
-	conn := somo.Connection{PID: "1", Program: "curl", RAddress: "203.0.113.10:443"}
+	conn := connlist.Connection{PID: "1", Program: "curl", RAddress: "203.0.113.10:443"}
 	(&Scanner{Store: hexwallStore, Mode: ModeWatch}).applyBlockedOutcome("203.0.113.10", conn)
 
 	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections`); got != 0 {
@@ -344,7 +344,7 @@ func TestApplyBlockedOutcomeEnforceModeLogsKillBeforeAttemptingIt(t *testing.T) 
 
 	// PID 1 (init) is guaranteed to be refused by enforcer.KillProcess, but the
 	// audit row must still be written first ("audit survives the kill").
-	conn := somo.Connection{PID: "1", Program: "curl", RAddress: "203.0.113.10:443"}
+	conn := connlist.Connection{PID: "1", Program: "curl", RAddress: "203.0.113.10:443"}
 	(&Scanner{Store: hexwallStore, Mode: ModeEnforce}).applyBlockedOutcome("203.0.113.10", conn)
 
 	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections WHERE ip = ?`, "203.0.113.10"); got != 1 {
@@ -355,7 +355,7 @@ func TestApplyBlockedOutcomeEnforceModeLogsKillBeforeAttemptingIt(t *testing.T) 
 func TestApplyBlockedOutcomeInvalidPIDLogsWarningAndReturns(t *testing.T) {
 	hexwallStore, dbPath := newTestStore(t)
 
-	conn := somo.Connection{PID: "not-a-pid", Program: "curl", RAddress: "203.0.113.11:443"}
+	conn := connlist.Connection{PID: "not-a-pid", Program: "curl", RAddress: "203.0.113.11:443"}
 	(&Scanner{Store: hexwallStore, Mode: ModeEnforce}).applyBlockedOutcome("203.0.113.11", conn)
 
 	// LogKill happens before ParsePID, so the audit row is still written.
@@ -375,7 +375,7 @@ func TestEvaluateIPOnlyTrustedIPUpdatesEstablished(t *testing.T) {
 	srv := failIfCalled(t)
 	client := deghost.NewClient(srv.URL, time.Second)
 
-	conn := somo.Connection{Program: "curl", RAddress: "203.0.113.20:443"}
+	conn := connlist.Connection{Program: "curl", RAddress: "203.0.113.20:443"}
 	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: true, Mode: ModeWatch}
 	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.20", conn)
 	if got != "trusted" {
@@ -392,7 +392,7 @@ func TestEvaluateIPOnlyDeghostDisabledReturnsUnknown(t *testing.T) {
 	srv := failIfCalled(t)
 	client := deghost.NewClient(srv.URL, time.Second)
 
-	conn := somo.Connection{Program: "curl", RAddress: "203.0.113.21:443"}
+	conn := connlist.Connection{Program: "curl", RAddress: "203.0.113.21:443"}
 	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: false, Mode: ModeWatch}
 	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.21", conn)
 	if got != "unknown" {
@@ -409,7 +409,7 @@ func TestEvaluateIPOnlyCachedCleanReturnsUnknownNoHTTPCall(t *testing.T) {
 	srv := failIfCalled(t)
 	client := deghost.NewClient(srv.URL, time.Second)
 
-	conn := somo.Connection{Program: "curl", RAddress: "203.0.113.22:443"}
+	conn := connlist.Connection{Program: "curl", RAddress: "203.0.113.22:443"}
 	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: true, Mode: ModeWatch}
 	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.22", conn)
 	if got != "unknown" {
@@ -427,7 +427,7 @@ func TestEvaluateIPOnlyCachedBlockedReturnsBlockedAndKills(t *testing.T) {
 	client := deghost.NewClient(srv.URL, time.Second)
 
 	// PID 1 keeps the actual kill attempt safely refused by enforcer guardrails.
-	conn := somo.Connection{PID: "1", Program: "curl", RAddress: "203.0.113.23:443"}
+	conn := connlist.Connection{PID: "1", Program: "curl", RAddress: "203.0.113.23:443"}
 	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: true, Mode: ModeEnforce}
 	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.23", conn)
 	if got != "blocked" {
@@ -447,7 +447,7 @@ func TestEvaluateIPOnlyLiveCheckPrivateReservedCachesClean(t *testing.T) {
 	client := deghost.NewClient(srv.URL, time.Second)
 
 	hexwallStore, _ := newTestStore(t)
-	conn := somo.Connection{Program: "curl", RAddress: "203.0.113.24:443"}
+	conn := connlist.Connection{Program: "curl", RAddress: "203.0.113.24:443"}
 	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: true, Mode: ModeWatch}
 	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.24", conn)
 	if got != "unknown" {
@@ -478,7 +478,7 @@ func TestEvaluateIPOnlyLiveCheckShouldKillCachesAndBlocks(t *testing.T) {
 	client := deghost.NewClient(srv.URL, time.Second)
 
 	hexwallStore, dbPath := newTestStore(t)
-	conn := somo.Connection{PID: "1", Program: "curl", RAddress: "203.0.113.25:443"}
+	conn := connlist.Connection{PID: "1", Program: "curl", RAddress: "203.0.113.25:443"}
 	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: true, Mode: ModeEnforce}
 	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.25", conn)
 	if got != "blocked" {
@@ -510,7 +510,19 @@ func TestRunScanZeroConnections(t *testing.T) {
 	hexwallStore, _ := newTestStore(t)
 
 	// Must not panic even with nil checker/deghost/zeek dependencies.
-	(&Scanner{Store: hexwallStore, Mode: ModeWatch}).Run(context.Background())
+	(&Scanner{Store: hexwallStore, Mode: ModeWatch, ConnectionLister: connlist.GetEstablishedConnections}).Run(context.Background())
+}
+
+func TestRunScanFallsBackToSomoWhenConnectionListerUnset(t *testing.T) {
+	installFakeSomo(t, "#!/bin/sh\necho '[]'\n")
+	hexwallStore, _ := newTestStore(t)
+
+	// Even when a caller forgets to populate the field, Run should still work.
+	scanner := &Scanner{Store: hexwallStore, Mode: ModeWatch}
+	scanner.Run(context.Background())
+	if scanner.ConnectionLister == nil {
+		t.Fatal("ConnectionLister fallback is nil after Run()")
+	}
 }
 
 func TestRunScanAllowlistedConnectionSkipsIPFallback(t *testing.T) {
@@ -519,7 +531,7 @@ echo '[{"proto":"tcp","local_port":"51820","remote_address":"127.0.0.1","remote_
 `)
 	hexwallStore, dbPath := newTestStore(t)
 
-	(&Scanner{Store: hexwallStore, Mode: ModeWatch}).Run(context.Background())
+	(&Scanner{Store: hexwallStore, Mode: ModeWatch, ConnectionLister: connlist.GetEstablishedConnections}).Run(context.Background())
 
 	// Rung 1 (static allowlist) short-circuits before the IP-only fallback, so
 	// no ip_observations row should exist for a loopback address.
@@ -534,7 +546,7 @@ echo '[{"proto":"tcp","local_port":"1","remote_address":"not-an-ip","remote_port
 `)
 	hexwallStore, dbPath := newTestStore(t)
 
-	(&Scanner{Store: hexwallStore, Mode: ModeWatch}).Run(context.Background())
+	(&Scanner{Store: hexwallStore, Mode: ModeWatch, ConnectionLister: connlist.GetEstablishedConnections}).Run(context.Background())
 
 	// The second, valid connection must still be processed through the IP-only
 	// fallback despite the first connection's address being unparsable.
@@ -549,7 +561,7 @@ echo '[{"proto":"tcp","local_port":"1","remote_address":"203.0.113.31","remote_p
 `)
 	hexwallStore, dbPath := newTestStore(t)
 
-	(&Scanner{Store: hexwallStore, Mode: ModeWatch}).Run(context.Background())
+	(&Scanner{Store: hexwallStore, Mode: ModeWatch, ConnectionLister: connlist.GetEstablishedConnections}).Run(context.Background())
 
 	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM ip_observations WHERE ip = ? AND outcome = 'unknown'`, "203.0.113.31"); got != 1 {
 		t.Fatalf("ip_observations unknown count = %d, want 1", got)

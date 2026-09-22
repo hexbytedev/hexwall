@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/hexbytedev/hexwall/internal/allowlist"
+	"github.com/hexbytedev/hexwall/internal/connlist"
 	"github.com/hexbytedev/hexwall/internal/deghost"
 	"github.com/hexbytedev/hexwall/internal/enforcer"
 	"github.com/hexbytedev/hexwall/internal/pihole"
-	"github.com/hexbytedev/hexwall/internal/somo"
 	"github.com/hexbytedev/hexwall/internal/store"
 	"github.com/hexbytedev/hexwall/internal/zeek"
 )
@@ -31,14 +31,15 @@ const (
 // a plain dependency or flag with nothing to validate, so there's no
 // NewScanner constructor.
 type Scanner struct {
-	Checker       *pihole.Checker
-	Store         *store.Store
-	DeghostClient *deghost.Client
-	ZeekClient    *zeek.Client
-	Mode          string
-	DeghostIP     bool
-	DeghostDomain bool
-	Debug         bool
+	Checker          *pihole.Checker
+	Store            *store.Store
+	DeghostClient    *deghost.Client
+	ZeekClient       *zeek.Client
+	ConnectionLister func() ([]connlist.Connection, error)
+	Mode             string
+	DeghostIP        bool
+	DeghostDomain    bool
+	Debug            bool
 }
 
 // scanSummary tracks per-scan outcome counts for the summary line.
@@ -106,6 +107,7 @@ func (s *Scanner) HandleZeekEvent(event zeek.Event) {
 
 	confidence := "medium"
 	actionTaken := "logged"
+
 	if blocked {
 		confidence = "high"
 		slog.Warn("zeek bypass alert", "src_ip", event.SrcIP, "dst_ip", event.DstIP, "dst_port", event.DstPort, "sni", event.SNI, "mode", selectedMode)
@@ -140,12 +142,17 @@ func (s *Scanner) Run(ctx context.Context) {
 		return
 	}
 
+	if s.ConnectionLister == nil {
+		slog.Warn("connection lister unset; defaulting to somo")
+		s.ConnectionLister = connlist.GetEstablishedConnections
+	}
+
 	selectedMode := normalizeMode(s.Mode)
 	if selectedMode != s.Mode {
 		slog.Warn("invalid scan mode; defaulting to watch", "mode", s.Mode, "fallback", selectedMode)
 	}
 
-	connections, err := somo.GetEstablishedConnections()
+	connections, err := s.ConnectionLister()
 	if err != nil {
 		slog.Error("error fetching connections", "err", err)
 		return
@@ -312,7 +319,7 @@ func (s *Scanner) Run(ctx context.Context) {
 // evaluateIPOnly handles the IP-only fallback path (rung 7) when no SNI is available.
 // It returns "trusted", "blocked", "unknown", or "error".
 // Every exit path records an IP observation before returning.
-func (s *Scanner) evaluateIPOnly(ctx context.Context, ipStr string, conn somo.Connection) string {
+func (s *Scanner) evaluateIPOnly(ctx context.Context, ipStr string, conn connlist.Connection) string {
 	allowed, err := s.Store.IsAllowed(ipStr)
 	if err != nil {
 		slog.Error("store lookup failed", "address", conn.RAddress, "err", err)
@@ -416,7 +423,7 @@ func (s *Scanner) evaluateIPOnly(ctx context.Context, ipStr string, conn somo.Co
 }
 
 // applyBlockedOutcome enforces the kill/watch policy for a blocked connection.
-func (s *Scanner) applyBlockedOutcome(ipStr string, conn somo.Connection) {
+func (s *Scanner) applyBlockedOutcome(ipStr string, conn connlist.Connection) {
 	selectedMode := normalizeMode(s.Mode)
 	if selectedMode == ModeWatch {
 		slog.Warn("watch mode: would kill connection", "address", conn.RAddress, "pid", conn.PID, "program", conn.Program)

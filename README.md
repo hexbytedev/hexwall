@@ -16,14 +16,14 @@ In short: `Pi-hole + somo + hexwall` gives you a practical containment layer for
 
 ## At a glance
 
-| Situation | Server without Pi-hole DNS | Server with only Pi-hole | Server with Pi-hole + somo + hexwall |
-| --- | --- | --- | --- |
-| Malicious domain resolved over DNS | ❌ Exposed | ✅ Can block at DNS layer | ✅ Can block at DNS layer |
-| Malware connects to a hard-coded IP directly | ❌ Exposed | ❌ Pi-hole does not see it | ✅ Direct-IP connection is visible and checked |
-| Identify which process owns the connection | ❌ No built-in visibility | ❌ No process visibility | ✅ `somo` shows PID/program |
-| Stop outbound exfiltration after compromise | ❌ No containment layer | ⚠️ Only if the attacker still uses DNS | ✅ Can kill suspicious established connections |
-| Supply-chain malware bypassing DNS | ❌ High risk | ❌ Still exposed | ✅ Stronger containment |
-| Overall outbound protection posture | ❌ Weak | ⚠️ Partial | 🛡️ Strongest of the three |
+| Situation                                    | Server without Pi-hole DNS | Server with only Pi-hole              | Server with Pi-hole + somo + hexwall          |
+| -------------------------------------------- | -------------------------- | ------------------------------------- | --------------------------------------------- |
+| Malicious domain resolved over DNS           | ❌ Exposed                  | ✅ Can block at DNS layer              | ✅ Can block at DNS layer                      |
+| Malware connects to a hard-coded IP directly | ❌ Exposed                  | ❌ Pi-hole does not see it             | ✅ Direct-IP connection is visible and checked |
+| Identify which process owns the connection   | ❌ No built-in visibility   | ❌ No process visibility               | ✅ `somo` shows PID/program                    |
+| Stop outbound exfiltration after compromise  | ❌ No containment layer     | ⚠️ Only if the attacker still uses DNS | ✅ Can kill suspicious established connections |
+| Supply-chain malware bypassing DNS           | ❌ High risk                | ❌ Still exposed                       | ✅ Stronger containment                        |
+| Overall outbound protection posture          | ❌ Weak                     | ⚠️ Partial                             | 🛡️ Strongest of the three                      |
 
 ---
 
@@ -39,12 +39,13 @@ When Zeek is enabled (`--zeek-log`), hexwall also captures the TLS SNI for each 
 
 ## Dependencies
 
-| Dependency                                | Role                                                       | Required                       |
-| ----------------------------------------- | ----------------------------------------------------------- | ------------------------------ |
-| [`somo`](https://github.com/theopfr/somo) | Lists established TCP/UDP connections; kills by PID          | Must be in `$PATH`             |
-| Pi-hole FTL database                      | Source of trusted DNS history and allow/deny policy lists    | Auto-detected or via `--db`    |
-| `deghostapi.hexbyte.dev`                  | Fraud/threat classification for unrecognized IPs and domains | Optional — see `--enable-deghost-*` below |
-| Zeek                                      | Passive capture of TLS SNI (`ssl.log`) and DNS-bypass notices (`notice.log`) | Optional — see `--zeek-*`/`--enable-zeek` below |
+| Dependency                                                   | Role                                                                         | Required                                                                  |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| [`ss`](https://wiki.linuxfoundation.org/networking/iproute2) | Lists established TCP connections; kills a single connection via `ss -K`     | Default — part of iproute2, present on virtually all Linux systems        |
+| [`somo`](https://github.com/theopfr/somo)                    | Fallback connection lister when `ss` is unavailable; kills by PID            | Fallback — only required if `ss` (iproute2) is unavailable, e.g. on macOS |
+| Pi-hole FTL database                                         | Source of trusted DNS history and allow/deny policy lists                    | Auto-detected or via `--db`                                               |
+| `deghostapi.hexbyte.dev`                                     | Fraud/threat classification for unrecognized IPs and domains                 | Optional — see `--enable-deghost-*` below                                 |
+| Zeek                                                         | Passive capture of TLS SNI (`ssl.log`) and DNS-bypass notices (`notice.log`) | Optional — see `--zeek-*`/`--enable-zeek` below                           |
 
 **Build dependency:** `modernc.org/sqlite` (pure-Go SQLite, no CGo or system libsqlite3 required).
 
@@ -61,9 +62,15 @@ You can download them from the project's GitHub Releases page:
 
 For production Linux servers, download the matching binary from Releases, place it where your deployment expects `./app/hexwall`, and use the included demo Docker Compose file at [`docker-compose.yml`](./docker-compose.yml) to launch it on the server.
 
-For macOS and Windows, prebuilt binaries are not published by CI. Clone the repository and build the binary manually before deployment.
+hexwall targets Linux, where prebuilt binaries are published by CI. macOS is best-effort: clone the repository and build the binary manually, and install `somo` as a fallback since `ss` (Linux's iproute2) isn't available there. Windows is not supported.
+
+### Connection backend
+
+At startup, hexwall picks a connection-listing backend by availability, not by OS: `ss` first if it's on `PATH`, then `somo`, then it exits with an install message if neither is found. This means `ss` is used by default on real Linux boxes (iproute2 ships with virtually every distro) and `somo` only comes into play as a fallback — on macOS, where `ss` doesn't exist, or on a stripped-down Linux system without iproute2 installed. The connection-kill path already tries `ss -K` first and falls back to a process-level signal kill regardless of which lister found the connection, so no behavior changes based on which backend is selected.
 
 ### Install `somo`
+
+The steps below are only needed on the fallback path described above (macOS, or a Linux box without `ss`).
 
 If `somo` is not already in your `$PATH`, this is the quickest way to install and verify it on Ubuntu or Debian:
 
@@ -98,18 +105,18 @@ If neither is found, start fails. Use `--db` to specify the path manually.
 
 ## CLI flags
 
-| Flag                      | Default                              | Description                                                                 |
-| ------------------------- | ------------------------------------- | ---------------------------------------------------------------------------- |
-| `--db`                    | _(auto-detected)_                     | Path to `pihole-FTL.db`                                                      |
-| `--hexwall-db`            | `./hexwall.db`                        | Path to the local hexwall database (created on first run)                    |
-| `--mode`                  | `watch`                               | `watch` — detect and log only; `enforce` — detect, log, and kill              |
-| `--debug`                 | `false`                               | Enable verbose per-connection scan logging                                   |
-| `--enable-zeek`           | `false`                               | Enable the Zeek `notice.log` DNS-bypass alert path (independent of `--zeek-log`) |
-| `--zeek-log`               | _(unset — SNI matching skipped)_      | Path to Zeek's `ssl.log`, used to match a connection's TLS SNI against Pi-hole's allow/deny lists |
-| `--zeek-notice-log`       | `/opt/zeek/logs/current/notice.log`   | Path to Zeek's `notice.log`; only read when `--enable-zeek` is set            |
-| `--enable-deghost-ip`     | `true`                                | Enable third-party IP reputation checks for unrecognized connections with no SNI |
-| `--enable-deghost-domain` | `true`                                | Enable third-party domain reputation checks for unrecognized SNI domains     |
-| `--version`               | `false`                               | Print version and exit                                                       |
+| Flag                      | Default                             | Description                                                                                       |
+| ------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `--db`                    | _(auto-detected)_                   | Path to `pihole-FTL.db`                                                                           |
+| `--hexwall-db`            | `./hexwall.db`                      | Path to the local hexwall database (created on first run)                                         |
+| `--mode`                  | `watch`                             | `watch` — detect and log only; `enforce` — detect, log, and kill                                  |
+| `--debug`                 | `false`                             | Enable verbose per-connection scan logging                                                        |
+| `--enable-zeek`           | `false`                             | Enable the Zeek `notice.log` DNS-bypass alert path (independent of `--zeek-log`)                  |
+| `--zeek-log`              | _(unset — SNI matching skipped)_    | Path to Zeek's `ssl.log`, used to match a connection's TLS SNI against Pi-hole's allow/deny lists |
+| `--zeek-notice-log`       | `/opt/zeek/logs/current/notice.log` | Path to Zeek's `notice.log`; only read when `--enable-zeek` is set                                |
+| `--enable-deghost-ip`     | `true`                              | Enable third-party IP reputation checks for unrecognized connections with no SNI                  |
+| `--enable-deghost-domain` | `true`                              | Enable third-party domain reputation checks for unrecognized SNI domains                          |
+| `--version`               | `false`                             | Print version and exit                                                                            |
 
 `--mode` accepts `watch` or `enforce` (case-insensitive). Any other value exits with an error.
 

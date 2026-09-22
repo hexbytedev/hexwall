@@ -10,7 +10,7 @@ import (
 
 // installFakeDocker writes an executable shell script named "docker" into a
 // temp directory and prepends it to PATH, mirroring the same trick used for
-// somo elsewhere in this project (see internal/somo/somo_test.go).
+// somo elsewhere in this project (see internal/connlist/connlist_test.go).
 func installFakeDocker(t *testing.T, script string) {
 	t.Helper()
 

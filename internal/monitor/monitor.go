@@ -427,15 +427,17 @@ func (s *Scanner) applyBlockedOutcome(ipStr string, conn somo.Connection) {
 		slog.Error("failed to log kill", "address", conn.RAddress, "err", err)
 	}
 
-	// Connection-level termination via `ss -K` (requires CONFIG_INET_DIAG_DESTROY)
-	// is deferred work.  KillProcess terminates the owning process, which is coarser.
 	pidInt, err := enforcer.ParsePID(conn.PID)
 	if err != nil {
 		slog.Warn("invalid PID, skipping kill", "pid", conn.PID, "address", conn.RAddress, "err", err)
 		return
 	}
-	if err := enforcer.KillProcess(pidInt, conn.Program, conn.RAddress); err != nil {
-		slog.Warn("failed to kill process", "address", conn.RAddress, "pid", conn.PID, "err", err)
+
+	// Prefers a connection-level kill (ss -K) so any other connection the same
+	// process holds is left untouched; falls back to killing the whole process
+	// when that isn't possible. See enforcer.KillConnection.
+	if err := enforcer.KillConnection(pidInt, conn.Program, conn.LPort, ipStr, conn.RPort); err != nil {
+		slog.Warn("failed to kill connection", "address", conn.RAddress, "pid", conn.PID, "err", err)
 	} else {
 		slog.Info("killed connection", "address", conn.RAddress)
 	}

@@ -81,6 +81,60 @@ func TestKillProcessCaseInsensitiveProtectedMatch(t *testing.T) {
 	}
 }
 
+// ---- KillConnection guardrails (same checkGuardrails as KillProcess) -----
+
+func TestKillConnectionRefusesPIDZero(t *testing.T) {
+	t.Parallel()
+
+	err := KillConnection(0, "curl", "51820", "1.2.3.4", "443")
+	if err == nil {
+		t.Fatal("KillConnection(0) = nil, want error")
+	}
+}
+
+func TestKillConnectionRefusesNegativePID(t *testing.T) {
+	t.Parallel()
+
+	err := KillConnection(-1, "curl", "51820", "1.2.3.4", "443")
+	if err == nil {
+		t.Fatal("KillConnection(-1) = nil, want error")
+	}
+}
+
+func TestKillConnectionRefusesPIDOne(t *testing.T) {
+	t.Parallel()
+
+	err := KillConnection(1, "systemd", "51820", "1.2.3.4", "443")
+	if err == nil {
+		t.Fatal("KillConnection(1) = nil, want error for init")
+	}
+}
+
+func TestKillConnectionRefusesOwnPID(t *testing.T) {
+	t.Parallel()
+
+	err := KillConnection(os.Getpid(), "test", "51820", "1.2.3.4", "443")
+	if err == nil {
+		t.Fatal("KillConnection(own PID) = nil, want error")
+	}
+}
+
+func TestKillConnectionRefusesProtectedPrograms(t *testing.T) {
+	t.Parallel()
+
+	protected := []string{"sshd", "dockerd", "systemd-resolved"}
+	for _, prog := range protected {
+		err := KillConnection(2, prog, "51820", "1.2.3.4", "443")
+		if err == nil {
+			t.Errorf("KillConnection(2, %q) = nil, want error for protected program", prog)
+			continue
+		}
+		if !strings.Contains(err.Error(), "protected") {
+			t.Errorf("KillConnection(2, %q) error = %q, want it to mention 'protected'", prog, err)
+		}
+	}
+}
+
 func TestParsePIDValid(t *testing.T) {
 	t.Parallel()
 

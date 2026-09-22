@@ -1,9 +1,12 @@
-// Package enforcer terminates processes that hold blocked connections.
+// Package enforcer terminates blocked connections, preferring to kill just the one
+// connection over the whole owning process.
 //
-// STOPGAP: this is deliberately coarser than intended. The goal is to terminate a single
-// connection; killing the owning process takes down every other connection it holds too.
-// It exists because somo offers no non-interactive per-connection kill. Replace with
-// `ss -K dst <ip> dport <port>` (requires CONFIG_INET_DIAG_DESTROY) when that work is done.
+// KillConnection is the preferred entry point: it tries a precise, connection-level
+// kill via `ss -K` (requires CONFIG_INET_DIAG_DESTROY and CAP_NET_ADMIN) and falls
+// back to killing the whole process — KillProcess's behavior — when that isn't
+// possible: ss is missing, the kernel doesn't support it, or hexwall isn't running
+// with the needed capability. The process-level fallback remains coarser than
+// intended: it takes down every other connection that process holds too.
 package enforcer
 
 import (
@@ -45,18 +48,13 @@ func isProtected(name string) bool {
 	return protectedPrograms[lower]
 }
 
-// KillProcess terminates the process holding a connection.
-//
-// Guardrails:
+// checkGuardrails applies the safety checks shared by both kill paths below,
+// before either one is attempted:
+//   - Refuses any PID <= 0.
 //   - Refuses PID 1 (init).
 //   - Refuses hexwall's own PID.
-//   - Refuses any PID <= 0.
 //   - Refuses protected programs (case-insensitive match).
-//   - Sends SIGTERM first, waits a grace period, then SIGKILL if still alive.
-//
-// The actual signal-sending is platform-specific; see terminate in
-// enforcer_unix.go / enforcer_windows.go.
-func KillProcess(pid int, program string, remoteAddr string) error {
+func checkGuardrails(pid int, program string) error {
 	if pid <= 0 {
 		return fmt.Errorf("invalid PID %d", pid)
 	}
@@ -72,6 +70,46 @@ func KillProcess(pid int, program string, remoteAddr string) error {
 	if isProtected(program) {
 		return fmt.Errorf("refusing to kill protected program %q (PID %d)", program, pid)
 	}
+
+	return nil
+}
+
+// KillProcess terminates the process holding a connection.
+//
+// Guardrails: see checkGuardrails.
+// Sends SIGTERM first, waits a grace period, then SIGKILL if still alive.
+// The actual signal-sending is platform-specific; see terminate in
+// enforcer_unix.go / enforcer_windows.go.
+func KillProcess(pid int, program string, remoteAddr string) error {
+	if err := checkGuardrails(pid, program); err != nil {
+		return err
+	}
+
+	slog.Warn("killing connection", "pid", pid, "program", program, "address", remoteAddr)
+
+	return terminate(pid, program)
+}
+
+// KillConnection kills the single connection identified by localPort/remoteIP/remotePort,
+// owned by pid/program. It prefers a precise, connection-level kill (see killSocket in
+// enforcer_socket.go) that leaves every other connection the process holds untouched,
+// falling back to killing the whole process only when that isn't possible.
+//
+// Guardrails are the same as KillProcess's, checked once before either kill path
+// is attempted.
+func KillConnection(pid int, program, localPort, remoteIP, remotePort string) error {
+	if err := checkGuardrails(pid, program); err != nil {
+		return err
+	}
+
+	remoteAddr := remoteIP + ":" + remotePort
+
+	socketErr := killSocket(localPort, remoteIP, remotePort)
+	if socketErr == nil {
+		slog.Info("killed single connection", "pid", pid, "program", program, "local_port", localPort, "remote", remoteAddr)
+		return nil
+	}
+	slog.Debug("connection-level kill unavailable, falling back to killing the process", "err", socketErr, "pid", pid, "program", program)
 
 	slog.Warn("killing connection", "pid", pid, "program", program, "address", remoteAddr)
 

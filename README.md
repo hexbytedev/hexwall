@@ -122,6 +122,15 @@ If neither is found, start fails. Use `--db` to specify the path manually.
 
 `--enable-zeek` and `--zeek-log` are independent switches for two unrelated Zeek consumers: `--zeek-log` feeds SNI-based domain matching into the main decision ladder, while `--enable-zeek` (plus `--zeek-notice-log`) turns on a separate, standalone DNS-bypass alert path. Either, both, or neither can be set.
 
+### Zeek setup
+
+hexwall tails `ssl.log` directly, in whichever of Zeek's two output formats it's actually producing — no Zeek-side configuration is required:
+
+- **TSV** (Zeek's default `LogAscii` output, used by a stock install with no extra config) — the column order is learned from the log file's own `#fields` header the first time it's read, rather than assumed, so it keeps working across Zeek versions or configurations that add extra columns.
+- **JSON** (`redef LogAscii::use_json = T;`) — also supported, parsed line by line.
+
+Tested against Zeek 9.0.0. Point `--zeek-log` at the running instance's `ssl.log`: for a plain `zeek -i <interface>` invocation, that's a file in the working directory Zeek was started from; under `zeekctl`, it's `<logdir>/current/ssl.log`.
+
 ### Debug logging
 
 When `--debug` is enabled, hexwall also logs intermediate, non-actionable outcomes it would otherwise stay quiet about — a domain or IP coming back clean from a reputation check, or a check being skipped because its flag is disabled. Warnings, blocks, and kills are always logged regardless of `--debug`.

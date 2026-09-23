@@ -131,9 +131,11 @@ func run() int {
 	// 1. Pick a connection-listing tool: ss (iproute2) if available, else somo.
 	connectionLister, toolName, err := connlist.SelectBackend()
 	if err != nil {
+		fmt.Println("No connection-listing tool available:", err)
 		slog.Error("no connection-listing tool available", "err", err)
 		return 1
 	}
+	fmt.Printf("> Using %s for connection listing.\n", toolName)
 	slog.Info("using connection-listing tool", "tool", toolName)
 
 	// 2. Resolve the Pi-hole database path from --db or auto-detection.

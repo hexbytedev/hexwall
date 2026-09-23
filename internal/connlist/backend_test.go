@@ -1,8 +1,10 @@
 package connlist
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -55,5 +57,67 @@ func TestSelectBackend(t *testing.T) {
 				t.Fatal("SelectBackend() lister = nil, want non-nil")
 			}
 		})
+	}
+}
+
+// ---- selectBackend: macOS never probes for ss ---------------------------
+
+func TestSelectBackendDarwinNeverCallsSSAvailable(t *testing.T) {
+	t.Parallel()
+
+	ssAvailableCalled := func() bool {
+		t.Error("ssAvailable() was called on darwin, want it never probed")
+		return true
+	}
+	somoInstalled := func() error { return nil }
+
+	_, name, err := selectBackend("darwin", ssAvailableCalled, somoInstalled)
+	if err != nil {
+		t.Fatalf("selectBackend(darwin) error = %v, want nil", err)
+	}
+	if name != "somo" {
+		t.Fatalf("selectBackend(darwin) name = %q, want %q (ss must never be picked on darwin, even if it claims available)", name, "somo")
+	}
+}
+
+func TestSelectBackendDarwinFailureMessageOmitsSS(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := selectBackend("darwin", func() bool { return false }, func() error { return errors.New("not found") })
+	if err == nil {
+		t.Fatal("selectBackend(darwin) error = nil, want error when somo is also missing")
+	}
+	if !strings.Contains(err.Error(), "somo") {
+		t.Fatalf("selectBackend(darwin) error = %q, want it to mention somo", err)
+	}
+	if strings.Contains(err.Error(), "install ss") {
+		t.Fatalf("selectBackend(darwin) error = %q, want it to NOT suggest installing ss on macOS", err)
+	}
+}
+
+func TestSelectBackendLinuxUnaffected(t *testing.T) {
+	t.Parallel()
+
+	lister, name, err := selectBackend("linux", func() bool { return true }, func() error { return nil })
+	if err != nil {
+		t.Fatalf("selectBackend(linux) error = %v, want nil", err)
+	}
+	if name != "ss" {
+		t.Fatalf("selectBackend(linux) name = %q, want %q", name, "ss")
+	}
+	if lister == nil {
+		t.Fatal("selectBackend(linux) lister = nil, want non-nil")
+	}
+}
+
+func TestSelectBackendLinuxFailureMessageMentionsBoth(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := selectBackend("linux", func() bool { return false }, func() error { return errors.New("not found") })
+	if err == nil {
+		t.Fatal("selectBackend(linux) error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "ss") || !strings.Contains(err.Error(), "somo") {
+		t.Fatalf("selectBackend(linux) error = %q, want it to mention both ss and somo", err)
 	}
 }

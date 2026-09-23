@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 )
 
@@ -33,15 +34,30 @@ func CheckInstalled() error {
 
 // SelectBackend picks a connection-listing tool by availability: ss
 // (iproute2) first since it needs no extra install on virtually any Linux
-// box, falling back to somo when ss isn't on PATH (e.g. macOS). name is
-// "ss" or "somo", for logging which tool is in effect.
+// box, falling back to somo when ss isn't on PATH. name is "ss" or "somo",
+// for logging which tool is in effect.
 func SelectBackend() (lister func() ([]Connection, error), name string, err error) {
-	if SSAvailable() {
+	return selectBackend(runtime.GOOS, SSAvailable, CheckInstalled)
+}
+
+// selectBackend is SelectBackend's logic with the OS and both availability
+// checks injectable, so tests can exercise the macOS branch deterministically
+// regardless of which OS the test itself runs on.
+//
+// ss depends on CONFIG_INET_DIAG_DESTROY, a Linux kernel feature — a binary
+// named "ss" on macOS could never actually destroy a socket even if one
+// existed, so macOS never probes for it at all and goes straight to somo.
+func selectBackend(goos string, ssAvailable func() bool, somoInstalled func() error) (lister func() ([]Connection, error), name string, err error) {
+	if goos != "darwin" && ssAvailable() {
 		return GetEstablishedConnectionsViaSS, "ss", nil
 	}
 
-	if CheckInstalled() == nil {
+	if somoInstalled() == nil {
 		return GetEstablishedConnections, "somo", nil
+	}
+
+	if goos == "darwin" {
+		return nil, "", fmt.Errorf("no connection-listing tool available: install somo (https://github.com/theopfr/somo) — ss (iproute2) is Linux-only and cannot work on macOS")
 	}
 
 	return nil, "", fmt.Errorf("no connection-listing tool available: install ss (iproute2) or somo (https://github.com/theopfr/somo)")

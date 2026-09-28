@@ -66,7 +66,7 @@ hexwall targets Linux, where prebuilt binaries are published by CI. macOS is bes
 
 ### Connection backend
 
-At startup, hexwall picks a connection-listing backend by availability, not by OS: `ss` first if it's on `PATH`, then `somo`, then it exits with an install message if neither is found. This means `ss` is used by default on real Linux boxes (iproute2 ships with virtually every distro) and `somo` only comes into play as a fallback — on macOS, where `ss` doesn't exist, or on a stripped-down Linux system without iproute2 installed. The connection-kill path already tries `ss -K` first and falls back to a process-level signal kill regardless of which lister found the connection, so no behavior changes based on which backend is selected.
+At startup, hexwall picks a connection-listing backend and prints which one it chose. On Linux, `ss` is used if it's on `PATH`, otherwise `somo`; hexwall exits with an install message if neither is found. `ss` is therefore the default on real Linux boxes (iproute2 ships with virtually every distro), and `somo` only comes into play on a stripped-down system without iproute2. On macOS, `ss` is never probed: its single-connection kill relies on a Linux kernel feature (`CONFIG_INET_DIAG_DESTROY`), so hexwall goes straight to `somo` and every kill there is process-level. The kill path works the same whichever lister found the connection (see [When a connection is killed](#when-a-connection-is-killed)).
 
 ### Install `somo`
 
@@ -164,7 +164,10 @@ Connections are not killed in these cases:
 - The IP reputation API returns HTTP `403`, treated as clean/private/reserved.
 - The reputation lookup itself fails — a failed lookup is never treated as a block.
 
-When a kill does happen, hexwall first records the event in the local `killed_connections` audit table, then signals the owning PID: `SIGTERM` first, escalating to `SIGKILL` after a 2-second grace period if the process is still alive. A hardcoded set of protected system processes (`systemd`, `sshd`, `dockerd`, and similar) can never be killed this way, whichever check triggered the match.
+When a kill does happen, hexwall first records the event in the local `killed_connections` audit table, then runs its guardrails: it refuses PID 1, its own PID, invalid PIDs, and a hardcoded set of protected system processes (`systemd`, `sshd`, `dockerd`, and similar), whichever check triggered the match. It then closes the connection in one of two ways:
+
+1. **Just that connection**: `ss -K` asks the kernel to destroy the single socket, leaving every other connection the process holds untouched. This needs `CAP_NET_ADMIN` (e.g. running as root) and a kernel built with `CONFIG_INET_DIAG_DESTROY`. Because `ss -K` can exit successfully even when the kernel refused, hexwall re-lists the socket afterwards and only counts the kill if the connection is actually gone.
+2. **The whole process** (fallback): if the connection is still there, or `ss` is unavailable (always the case on macOS), hexwall signals the owning PID: `SIGTERM` first, escalating to `SIGKILL` after a 2-second grace period if the process is still alive. This also drops every other connection that process holds.
 
 ### Reputation API cache behavior
 

@@ -246,16 +246,42 @@ func (c *Checker) PolicyCounts() (map[string]int64, error) {
 	return counts, nil
 }
 
-// DomainsSeenSince returns the distinct domains Pi-hole recorded since the given Unix timestamp.
+// answeredStatuses lists the FTL query status codes that count as "Pi-hole answered this
+// domain". Only these feed the trusted-IP cache. A blocked query is still written to the
+// query log, and without this filter its domain would be re-resolved by the host's own
+// resolver and its real IP trusted -- blocking a domain would end up trusting it.
+// Status codes: https://docs.pi-hole.net/database/query-database/#query-status
+//
+// This is an allow-list on purpose: a status code added by a future FTL release is
+// untrusted until it is reviewed here, rather than silently trusted.
+var answeredStatuses = []int{
+	2,  // forwarded to upstream
+	3,  // answered from cache
+	12, // retried
+	13, // retried, but ignored
+	14, // already forwarded
+	17, // answered from stale cache
+}
+
+// DomainsSeenSince returns the distinct domains Pi-hole answered since the given Unix timestamp.
+// Queries Pi-hole blocked are excluded; see answeredStatuses.
 func (c *Checker) DomainsSeenSince(since int64) ([]string, error) {
-	rows, err := c.db.Query(`
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(answeredStatuses)), ",")
+	args := make([]any, 0, len(answeredStatuses)+1)
+	args = append(args, since)
+	for _, status := range answeredStatuses {
+		args = append(args, status)
+	}
+
+	rows, err := c.db.Query(fmt.Sprintf(`
 		SELECT DISTINCT LOWER(TRIM(domain))
 		FROM queries
 		WHERE timestamp >= ?
 		  AND domain IS NOT NULL
 		  AND TRIM(domain) <> ''
+		  AND status IN (%s)
 		ORDER BY LOWER(TRIM(domain))
-	`, since)
+	`, placeholders), args...)
 	if err != nil {
 		return nil, fmt.Errorf("database query failed: %w", err)
 	}

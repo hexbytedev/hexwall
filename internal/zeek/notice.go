@@ -1,82 +1,249 @@
 package zeek
 
 import (
-	"bufio"
+	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
+// DNSBypassScript is the Zeek script that writes the notices this file reads. It ships
+// inside the hexwall binary (installed by `hexwall zeek-setup`) so the script and this
+// parser can never drift apart: the script puts the SNI in the notice's sub field, and
+// parseLine reads it from there.
+//
+//go:embed dns-bypass.zeek
+var DNSBypassScript []byte
+
+// bypassNote is the notice type raised by DNSBypassScript. notice.log carries every Zeek
+// notice (invalid certificates, scans, ...); only this one is a DNS-bypass alert.
+const bypassNote = "DNSBypass::PossibleBypass"
+
 var (
-	// ErrNoticeLineEmpty indicates a notice log line was blank.
-	ErrNoticeLineEmpty = errors.New("empty notice line")
-	// ErrNoticeLineNoFields indicates a notice log line parsed as JSON but had none of the recognized fields.
-	ErrNoticeLineNoFields = errors.New("notice line did not contain recognizable fields")
+	// ErrNoticeHeaderMissing indicates a TSV data line arrived before the "#fields" header that names its columns.
+	ErrNoticeHeaderMissing = errors.New("tsv notice line before its #fields header")
+	// ErrNoticeNoSNI indicates a DNS-bypass notice with no SNI in its sub field, e.g. one
+	// written by an older copy of the Zeek script; re-running `hexwall zeek-setup` fixes it.
+	ErrNoticeNoSNI = errors.New("dns-bypass notice without an SNI in sub; re-run hexwall zeek-setup")
 )
 
 // Event is a parsed DNS bypass notice from Zeek.
 type Event struct {
 	Timestamp time.Time
 	SrcIP     string
+	SrcPort   string
 	DstIP     string
 	DstPort   string
 	SNI       string
 }
 
-// ParseNoticeLine parses a single Zeek notice JSON line into an Event.
-func ParseNoticeLine(line string) (Event, error) {
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return Event{}, ErrNoticeLineEmpty
-	}
-
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(line), &payload); err != nil {
-		return Event{}, fmt.Errorf("parse notice line: %w", err)
-	}
-
-	event := Event{
-		Timestamp: time.Now(),
-	}
-
-	if ts, ok := payload["ts"].(string); ok {
-		if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil {
-			event.Timestamp = parsed
-		}
-	}
-
-	if ts, ok := payload["timestamp"].(string); ok {
-		if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil {
-			event.Timestamp = parsed
-		}
-	}
-
-	event.SrcIP = stringValue(payload["src_ip"], payload["src"], payload["id.orig_h"])
-	event.DstIP = stringValue(payload["dst_ip"], payload["dst"], payload["id.resp_h"])
-	event.DstPort = stringValue(payload["dst_port"], payload["p"], payload["id.resp_p"])
-	event.SNI = stringValue(payload["sni"], payload["server_name"])
-
-	if event.SrcIP == "" && event.DstIP == "" && event.SNI == "" {
-		return Event{}, ErrNoticeLineNoFields
-	}
-
-	return event, nil
+// noticeParser turns notice.log lines into Events, in either of Zeek's log formats: TSV
+// (the default), read against the column order of the file's "#fields" header, or JSON
+// (LogAscii::use_json = T). It remembers the header between calls, so it must be fed one
+// file's lines in order.
+type noticeParser struct {
+	tsvFields map[string]int
 }
 
-// WatchNoticeLog tails a Zeek notice log and emits parsed Events.
+// parseLine returns ok=false with a nil error for lines that are not DNS-bypass alerts:
+// blank lines, header lines, and other notice types.
+func (p *noticeParser) parseLine(line string) (event Event, ok bool, err error) {
+	line = strings.TrimSuffix(line, "\r")
+	switch {
+	case strings.TrimSpace(line) == "":
+		return Event{}, false, nil
+	case strings.HasPrefix(line, "#"):
+		if fields := parseTSVFieldsLine(line); fields != nil {
+			p.tsvFields = fields
+		}
+		return Event{}, false, nil
+	}
+
+	fields, err := p.fields(line)
+	if err != nil {
+		return Event{}, false, err
+	}
+	if fields["note"] != bypassNote {
+		return Event{}, false, nil
+	}
+
+	if fields["sub"] == "" {
+		return Event{}, false, ErrNoticeNoSNI
+	}
+
+	return Event{
+		Timestamp: parseZeekTime(fields["ts"]),
+		SrcIP:     firstNonEmpty(fields["src"], fields["id.orig_h"]),
+		SrcPort:   fields["id.orig_p"],
+		DstIP:     firstNonEmpty(fields["dst"], fields["id.resp_h"]),
+		DstPort:   firstNonEmpty(fields["p"], fields["id.resp_p"]),
+		SNI:       fields["sub"],
+	}, true, nil
+}
+
+// fields maps column name to value for one data line. Unset values are left out.
+func (p *noticeParser) fields(line string) (map[string]string, error) {
+	if strings.HasPrefix(line, "{") {
+		decoder := json.NewDecoder(strings.NewReader(line))
+		// Keeps ts as "1398362902.726337" rather than a float64 printed as 1.398362902726337e+09.
+		decoder.UseNumber()
+
+		var payload map[string]any
+		if err := decoder.Decode(&payload); err != nil {
+			return nil, fmt.Errorf("parse json notice line: %w", err)
+		}
+
+		fields := make(map[string]string, len(payload))
+		for name, value := range payload {
+			fields[name] = fmt.Sprint(value)
+		}
+		return fields, nil
+	}
+
+	if p.tsvFields == nil {
+		return nil, ErrNoticeHeaderMissing
+	}
+
+	cols := strings.Split(line, "\t")
+	fields := make(map[string]string, len(p.tsvFields))
+	for name, i := range p.tsvFields {
+		// "-" is Zeek's unset-field marker, "(empty)" its empty-set marker.
+		if i < len(cols) && cols[i] != "-" && cols[i] != "(empty)" {
+			fields[name] = cols[i]
+		}
+	}
+	return fields, nil
+}
+
+// parseZeekTime reads Zeek's default epoch-seconds timestamp, or an RFC 3339 one (the
+// LogAscii::json_timestamps option). It falls back to now so an event is never undated.
+func parseZeekTime(value string) time.Time {
+	if seconds, err := strconv.ParseFloat(value, 64); err == nil {
+		whole, frac := math.Modf(seconds)
+		return time.Unix(int64(whole), int64(frac*1e9))
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed
+	}
+	return time.Now()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// noticeTailer reads notice.log from where it last stopped.
+type noticeTailer struct {
+	path          string
+	offset        int64
+	parser        noticeParser
+	warnedBadLine bool
+}
+
+// skipExisting reads the file as it is now without sending anything: the parser still
+// learns the TSV "#fields" header at the top, but alerts already in the file are not
+// replayed. In enforce mode an old alert would otherwise trigger a kill on every restart.
+func (t *noticeTailer) skipExisting() {
+	t.read(nil)
+}
+
+// poll reads every complete line added since the last poll and sends its DNS-bypass alerts.
+func (t *noticeTailer) poll(events chan<- Event) {
+	t.read(events)
+}
+
+// read consumes the complete lines past t.offset. With a nil events channel it only
+// advances the offset and the parser's header.
+func (t *noticeTailer) read(events chan<- Event) {
+	file, err := os.Open(t.path)
+	if err != nil {
+		slog.Debug("zeek: cannot open notice log", "path", t.path, "err", err)
+		return
+	}
+	defer func() { _ = file.Close() }()
+
+	fi, err := file.Stat()
+	if err != nil {
+		slog.Debug("zeek: cannot stat notice log", "path", t.path, "err", err)
+		return
+	}
+
+	// Smaller than what was already read: the log was rotated. The new file starts with
+	// its own header, so forget the old one too.
+	if fi.Size() < t.offset {
+		t.offset = 0
+		t.parser = noticeParser{}
+	}
+	if fi.Size() == t.offset {
+		return
+	}
+
+	if _, err := file.Seek(t.offset, io.SeekStart); err != nil {
+		slog.Debug("zeek: seek notice log failed", "path", t.path, "err", err)
+		return
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		slog.Debug("zeek: read notice log failed", "path", t.path, "err", err)
+		return
+	}
+
+	// Zeek may still be writing the last line. Stop at the last newline; the unfinished
+	// line is read again, whole, on a later poll.
+	end := bytes.LastIndexByte(data, '\n')
+	if end == -1 {
+		return
+	}
+	t.offset += int64(end + 1)
+
+	for _, line := range strings.Split(string(data[:end]), "\n") {
+		event, ok, err := t.parser.parseLine(line)
+		if err != nil {
+			// Warn once: a format mismatch fails every line, and one warning is enough
+			// to show that alerts are being missed.
+			if !t.warnedBadLine {
+				slog.Warn("zeek: notice log line could not be parsed; DNS-bypass alerts may be missed", "path", t.path, "err", err)
+				t.warnedBadLine = true
+			} else {
+				slog.Debug("zeek: notice log line could not be parsed", "path", t.path, "err", err)
+			}
+			continue
+		}
+		if !ok || events == nil {
+			continue
+		}
+
+		select {
+		case events <- event:
+		default:
+			slog.Warn("zeek: DNS-bypass alert dropped, alert handler is behind", "sni", event.SNI, "dst_ip", event.DstIP)
+		}
+	}
+}
+
+// WatchNoticeLog tails a Zeek notice log and emits parsed DNS-bypass Events.
 func WatchNoticeLog(ctx context.Context, path string, events chan<- Event) error {
 	logPath := strings.TrimSpace(path)
 	if ctx == nil || logPath == "" {
 		return nil
 	}
 
-	var offset int64
+	tailer := &noticeTailer{path: logPath}
+	tailer.skipExisting()
 	poller := time.NewTicker(2 * time.Second)
 	defer poller.Stop()
 
@@ -85,68 +252,7 @@ func WatchNoticeLog(ctx context.Context, path string, events chan<- Event) error
 		case <-ctx.Done():
 			return nil
 		case <-poller.C:
-			file, err := os.Open(logPath)
-			if err != nil {
-				slog.Debug("zeek: cannot open notice log", "path", logPath, "err", err)
-				continue
-			}
-
-			fi, err := file.Stat()
-			if err != nil {
-				_ = file.Close()
-				slog.Debug("zeek: cannot stat notice log", "path", logPath, "err", err)
-				continue
-			}
-
-			if fi.Size() < offset {
-				offset = 0
-			}
-			if fi.Size() > offset {
-				if _, err := file.Seek(offset, io.SeekStart); err != nil {
-					_ = file.Close()
-					slog.Debug("zeek: seek notice log failed", "path", logPath, "err", err)
-					continue
-				}
-
-				scanner := bufio.NewScanner(file)
-				for scanner.Scan() {
-					line := strings.TrimSpace(scanner.Text())
-					if line == "" {
-						continue
-					}
-
-					event, err := ParseNoticeLine(line)
-					if err != nil {
-						continue
-					}
-
-					select {
-					case events <- event:
-					default:
-					}
-				}
-				if err := scanner.Err(); err != nil {
-					slog.Debug("zeek: notice log scan failed", "path", logPath, "err", err)
-				}
-			}
-			_ = file.Close()
-			offset = fi.Size()
+			tailer.poll(events)
 		}
 	}
-}
-
-func stringValue(values ...any) string {
-	for _, value := range values {
-		switch v := value.(type) {
-		case string:
-			return strings.TrimSpace(v)
-		case fmt.Stringer:
-			return strings.TrimSpace(v.String())
-		case nil:
-			continue
-		default:
-			return fmt.Sprint(v)
-		}
-	}
-	return ""
 }

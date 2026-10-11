@@ -326,6 +326,81 @@ func TestHandleZeekEventNoopCases(t *testing.T) {
 	(&Scanner{Checker: checker, Store: hexwallStore, Mode: ModeWatch}).HandleZeekEvent(zeek.Event{SrcIP: "10.0.0.1", SNI: ""})
 }
 
+// A blocked DNS-bypass alert for a connection this machine owns is killed in enforce mode.
+// The connection's PID is 1, which the enforcer's guardrails always refuse, so no real
+// process is signalled; the audit row proves the kill path was taken.
+func TestHandleZeekEventEnforceKillsLocalConnection(t *testing.T) {
+	checker := newTestChecker(t, func(db *sql.DB) {
+		insertDomain(t, db, "evil.example.com", 1) // denylist
+	})
+	hexwallStore, dbPath := newTestStore(t)
+
+	local := connlist.Connection{LPort: "55881", RAddress: "203.0.113.20:443", RPort: "443", PID: "1", Program: "curl"}
+	scanner := &Scanner{
+		Checker: checker, Store: hexwallStore, Mode: ModeEnforce,
+		ConnectionLister: func() ([]connlist.Connection, error) { return []connlist.Connection{local}, nil },
+	}
+	event := zeek.Event{SrcIP: "192.168.0.223", SrcPort: "55881", DstIP: "203.0.113.20", DstPort: "443", SNI: "evil.example.com"}
+	scanner.HandleZeekEvent(event)
+
+	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections WHERE ip = ?`, "203.0.113.20"); got != 1 {
+		t.Fatalf("killed_connections count = %d, want 1", got)
+	}
+	alert, err := hexwallStore.RecentZeekAlert(event.SrcIP, event.SNI)
+	if err != nil || alert == nil {
+		t.Fatalf("RecentZeekAlert() = %v, %v; want persisted alert", alert, err)
+	}
+	if alert.ActionTaken != "kill_attempted" {
+		t.Fatalf("alert.ActionTaken = %q, want %q", alert.ActionTaken, "kill_attempted")
+	}
+}
+
+// A connection that isn't in this machine's socket list belongs to another device (or has
+// closed). hexwall cannot close a socket on another machine, so it records and warns.
+func TestHandleZeekEventEnforceOtherDeviceNotKilled(t *testing.T) {
+	checker := newTestChecker(t, func(db *sql.DB) {
+		insertDomain(t, db, "evil.example.com", 1)
+	})
+	hexwallStore, dbPath := newTestStore(t)
+
+	unrelated := connlist.Connection{LPort: "40000", RAddress: "203.0.113.20:443", RPort: "443", PID: "1", Program: "curl"}
+	scanner := &Scanner{
+		Checker: checker, Store: hexwallStore, Mode: ModeEnforce,
+		ConnectionLister: func() ([]connlist.Connection, error) { return []connlist.Connection{unrelated}, nil },
+	}
+	event := zeek.Event{SrcIP: "192.168.0.50", SrcPort: "55881", DstIP: "203.0.113.20", DstPort: "443", SNI: "evil.example.com"}
+	scanner.HandleZeekEvent(event)
+
+	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections`); got != 0 {
+		t.Fatalf("killed_connections count = %d, want 0", got)
+	}
+	alert, err := hexwallStore.RecentZeekAlert(event.SrcIP, event.SNI)
+	if err != nil || alert == nil {
+		t.Fatalf("RecentZeekAlert() = %v, %v; want persisted alert", alert, err)
+	}
+	if alert.ActionTaken != "not_on_this_host" {
+		t.Fatalf("alert.ActionTaken = %q, want %q", alert.ActionTaken, "not_on_this_host")
+	}
+}
+
+func TestHandleZeekEventWatchModeDoesNotKill(t *testing.T) {
+	checker := newTestChecker(t, func(db *sql.DB) {
+		insertDomain(t, db, "evil.example.com", 1)
+	})
+	hexwallStore, dbPath := newTestStore(t)
+
+	local := connlist.Connection{LPort: "55881", RAddress: "203.0.113.20:443", RPort: "443", PID: "1", Program: "curl"}
+	scanner := &Scanner{
+		Checker: checker, Store: hexwallStore, Mode: ModeWatch,
+		ConnectionLister: func() ([]connlist.Connection, error) { return []connlist.Connection{local}, nil },
+	}
+	scanner.HandleZeekEvent(zeek.Event{SrcIP: "192.168.0.223", SrcPort: "55881", DstIP: "203.0.113.20", DstPort: "443", SNI: "evil.example.com"})
+
+	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections`); got != 0 {
+		t.Fatalf("killed_connections count = %d, want 0 in watch mode", got)
+	}
+}
+
 // ---- applyBlockedOutcome ---------------------------------------------------
 
 func TestApplyBlockedOutcomeWatchModeNeverLogsKill(t *testing.T) {

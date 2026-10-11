@@ -89,7 +89,12 @@ func remoteIP(address string) (net.IP, error) {
 	return ip, nil
 }
 
-// HandleZeekEvent evaluates a Zeek notice event against the current policy and persists it.
+// HandleZeekEvent evaluates a Zeek DNS-bypass notice against Pi-hole policy and persists it.
+//
+// A notice whose SNI is policy-blocked is handled like rung 4: the connection is killed in
+// enforce mode and reported in watch mode. hexwall can only close sockets on the machine
+// it runs on, so the connection is first looked up in this machine's socket list; a notice
+// about another device (Zeek watching a mirrored port, say) is recorded but not acted on.
 func (s *Scanner) HandleZeekEvent(event zeek.Event) {
 	if s.Checker == nil || s.Store == nil {
 		return
@@ -107,21 +112,62 @@ func (s *Scanner) HandleZeekEvent(event zeek.Event) {
 
 	confidence := "medium"
 	actionTaken := "logged"
+	var conn connlist.Connection
+	found := false
 
 	if blocked {
 		confidence = "high"
 		slog.Warn("zeek bypass alert", "src_ip", event.SrcIP, "dst_ip", event.DstIP, "dst_port", event.DstPort, "sni", event.SNI, "mode", selectedMode)
+
+		conn, found = s.findLocalConnection(event)
+		switch {
+		case !found:
+			actionTaken = "not_on_this_host"
+			slog.Warn("zeek bypass alert: connection is not on this machine (another device, or already closed); hexwall can only kill its own machine's connections",
+				"src_ip", event.SrcIP, "src_port", event.SrcPort, "dst_ip", event.DstIP, "sni", event.SNI)
+		case selectedMode == ModeEnforce:
+			actionTaken = "kill_attempted"
+		}
 	} else {
 		slog.Info("zeek notice was not policy-blocked", "src_ip", event.SrcIP, "dst_ip", event.DstIP, "dst_port", event.DstPort, "sni", event.SNI)
 	}
 
+	// Persist before acting, so the alert is on record even if the kill goes wrong.
 	if err := s.Store.LogZeekAlert(event.SrcIP, event.DstIP, event.DstPort, event.SNI, blocked, confidence, actionTaken); err != nil {
 		slog.Error("failed to persist zeek alert", "src_ip", event.SrcIP, "sni", event.SNI, "err", err)
 	}
 
-	if selectedMode == ModeEnforce && blocked {
-		slog.Info("enforce mode: zeek alert recorded without direct connection kill", "src_ip", event.SrcIP, "sni", event.SNI)
+	if found {
+		if ip, err := remoteIP(conn.RAddress); err == nil {
+			s.applyBlockedOutcome(ip.String(), conn)
+		}
 	}
+}
+
+// findLocalConnection looks a Zeek notice's connection up in this machine's socket list.
+// Zeek names a connection from the client's side (orig port -> resp IP:port); for a
+// connection this machine opened, that is its local port and remote address.
+func (s *Scanner) findLocalConnection(event zeek.Event) (connlist.Connection, bool) {
+	wantIP := net.ParseIP(event.DstIP)
+	if s.ConnectionLister == nil || event.SrcPort == "" || wantIP == nil {
+		return connlist.Connection{}, false
+	}
+
+	connections, err := s.ConnectionLister()
+	if err != nil {
+		slog.Warn("zeek bypass alert: could not list connections", "err", err)
+		return connlist.Connection{}, false
+	}
+
+	for _, conn := range connections {
+		if conn.LPort != event.SrcPort || conn.RPort != event.DstPort {
+			continue
+		}
+		if ip, err := remoteIP(conn.RAddress); err == nil && ip.Equal(wantIP) {
+			return conn, true
+		}
+	}
+	return connlist.Connection{}, false
 }
 
 // Run inspects established connections and applies the decision ladder.

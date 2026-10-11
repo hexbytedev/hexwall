@@ -108,3 +108,55 @@ func TestZeekLogDir(t *testing.T) {
 		t.Fatalf("zeekLogDir() = %q, want %q", got, "/var/log/zeek")
 	}
 }
+
+// Setup then Teardown must give local.zeek back exactly as it was.
+func TestRemoveLoad_UndoesEnsureLoaded(t *testing.T) {
+	localZeek := filepath.Join(t.TempDir(), "local.zeek")
+	original := "@load misc/detect-traceroute\n\n@load tuning/defaults\n"
+	if err := os.WriteFile(localZeek, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ensureLoaded(localZeek); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := removeLoad(localZeek)
+	if err != nil || !removed {
+		t.Fatalf("removeLoad() = %v, %v; want true, nil", removed, err)
+	}
+	got, _ := os.ReadFile(localZeek)
+	if string(got) != original {
+		t.Fatalf("local.zeek after setup+teardown:\n%q\nwant:\n%q", got, original)
+	}
+
+	if removed, err := removeLoad(localZeek); err != nil || removed {
+		t.Fatalf("second removeLoad() = %v, %v; want false, nil", removed, err)
+	}
+}
+
+func TestRemoveScript_OnlyDeletesHexwallsOwn(t *testing.T) {
+	dir := t.TempDir()
+
+	ours := filepath.Join(dir, "ours.zeek")
+	if err := os.WriteFile(ours, DNSBypassScript, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := removeScript(ours); err != nil || !deleted {
+		t.Fatalf("removeScript(hexwall's script) = %v, %v; want true, nil", deleted, err)
+	}
+
+	foreign := filepath.Join(dir, "foreign.zeek")
+	if err := os.WriteFile(foreign, []byte("# someone's own dns-bypass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := removeScript(foreign); err != nil || deleted {
+		t.Fatalf("removeScript(foreign) = %v, %v; want false, nil", deleted, err)
+	}
+	if _, err := os.Stat(foreign); err != nil {
+		t.Fatalf("foreign script was deleted: %v", err)
+	}
+
+	if deleted, err := removeScript(filepath.Join(dir, "missing.zeek")); err != nil || deleted {
+		t.Fatalf("removeScript(missing) = %v, %v; want false, nil", deleted, err)
+	}
+}

@@ -15,8 +15,11 @@ import (
 )
 
 const (
-	scriptName = "dns-bypass.zeek"
-	loadLine   = "@load dns-bypass"
+	scriptName  = "dns-bypass.zeek"
+	loadLine    = "@load dns-bypass"
+	loadComment = "# Added by hexwall zeek-setup: DNS-bypass notices that hexwall reads."
+	// Every version of the script carries this phrase; Teardown only deletes a file with it.
+	scriptSignature = "hexwall zeek-setup"
 	// Where Zeek's binary packages install; under sudo, /opt/zeek/bin is usually not on PATH.
 	defaultZeekConfig = "/opt/zeek/bin/zeek-config"
 )
@@ -86,6 +89,92 @@ Next steps:
 	return nil
 }
 
+// Teardown undoes Setup: it removes the @load lines from local.zeek and deletes the script.
+// A dns-bypass.zeek that hexwall didn't write is left in place. A machine without Zeek has
+// nothing to undo.
+func Teardown(out io.Writer) error {
+	zeekConfig, err := findZeekConfig()
+	if err != nil {
+		_, _ = fmt.Fprintln(out, "✓ Zeek not found; nothing to remove there")
+		return nil
+	}
+	siteDir, err := zeekConfigValue(zeekConfig, "--site_dir")
+	if err != nil {
+		return err
+	}
+
+	localZeek := filepath.Join(siteDir, "local.zeek")
+	removed, err := removeLoad(localZeek)
+	if err != nil {
+		return err
+	}
+	if removed {
+		_, _ = fmt.Fprintf(out, "✓ removed %q from %s\n", loadLine, localZeek)
+	}
+
+	script := filepath.Join(siteDir, scriptName)
+	deleted, err := removeScript(script)
+	if err != nil {
+		return err
+	}
+	if deleted {
+		_, _ = fmt.Fprintf(out, "✓ deleted %s\n", script)
+	} else if _, statErr := os.Stat(script); statErr == nil {
+		_, _ = fmt.Fprintf(out, "! %s wasn't written by hexwall; left in place\n", script)
+	}
+	return nil
+}
+
+// removeLoad deletes the lines ensureLoaded added: the @load line, its comment, and the
+// blank line before the comment.
+func removeLoad(localZeek string) (removed bool, err error) {
+	data, err := os.ReadFile(localZeek)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, permissionHint(fmt.Errorf("read %s: %w", localZeek, err))
+	}
+
+	lines := strings.Split(string(data), "\n")
+	kept := make([]string, 0, len(lines))
+	for i, line := range lines {
+		switch trimmed := strings.TrimSpace(line); {
+		case trimmed == loadLine || trimmed == loadComment:
+			removed = true
+		case trimmed == "" && i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == loadComment:
+			// The blank line ensureLoaded put before its comment.
+		default:
+			kept = append(kept, line)
+		}
+	}
+	if !removed {
+		return false, nil
+	}
+	if err := os.WriteFile(localZeek, []byte(strings.Join(kept, "\n")), 0o644); err != nil {
+		return false, permissionHint(fmt.Errorf("write %s: %w", localZeek, err))
+	}
+	return true, nil
+}
+
+// removeScript deletes the script if hexwall wrote it (any version), and reports whether it did.
+func removeScript(path string) (deleted bool, err error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, permissionHint(fmt.Errorf("read %s: %w", path, err))
+	}
+	if !bytes.Contains(data, []byte(scriptSignature)) {
+		return false, nil
+	}
+	if err := os.Remove(path); err != nil {
+		return false, permissionHint(fmt.Errorf("delete %s: %w", path, err))
+	}
+	return true, nil
+}
+
 // Zeekctl returns the path of the local Zeek's zeekctl, located through zeek-config.
 func Zeekctl() (string, error) {
 	zeekConfig, err := findZeekConfig()
@@ -141,7 +230,7 @@ func ensureLoaded(localZeek string) (added bool, err error) {
 		}
 	}
 
-	addition := "\n# Added by hexwall zeek-setup: DNS-bypass notices that hexwall reads.\n" + loadLine + "\n"
+	addition := "\n" + loadComment + "\n" + loadLine + "\n"
 	if len(data) > 0 && !bytes.HasSuffix(data, []byte("\n")) {
 		addition = "\n" + addition
 	}

@@ -91,6 +91,55 @@ hexwall now starts at boot and restarts if it crashes.
 	return nil
 }
 
+// Uninstall stops, disables and deletes the units hexwall installed. A zeek.service hexwall
+// didn't write keeps running untouched.
+func Uninstall(out io.Writer) error {
+	if os.Geteuid() != 0 {
+		return errors.New("removing systemd units needs root (run with sudo)")
+	}
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		_, _ = fmt.Fprintln(out, "✓ no systemd here; no units to remove")
+		return nil
+	}
+	return uninstall(out, unitDir, runSystemctl)
+}
+
+func uninstall(out io.Writer, dir string, systemctl func(args ...string) error) error {
+	var removed []string
+	// hexwall first: it is ordered after Zeek, so it stops before Zeek does.
+	for _, unit := range []string{hexwallUnit, zeekUnit} {
+		path := filepath.Join(dir, unit)
+		data, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !bytes.HasPrefix(data, []byte(marker)) {
+			_, _ = fmt.Fprintf(out, "! %s wasn't written by hexwall; left in place\n", path)
+			continue
+		}
+		if err := systemctl("disable", "--now", unit); err != nil {
+			return fmt.Errorf("systemctl disable --now %s: %w", unit, err)
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(out, "✓ stopped and removed %s\n", path)
+		removed = append(removed, unit)
+	}
+
+	if len(removed) == 0 {
+		_, _ = fmt.Fprintln(out, "✓ no hexwall systemd units installed")
+		return nil
+	}
+	if err := systemctl("daemon-reload"); err != nil {
+		return fmt.Errorf("systemctl daemon-reload: %w", err)
+	}
+	return nil
+}
+
 // zeekUnitOwner reports whether zeek.service is free for hexwall to write: either absent,
 // or a unit hexwall wrote earlier.
 func zeekUnitOwner(dir string, vendorDirs []string) (bool, error) {

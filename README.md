@@ -193,6 +193,16 @@ sudo systemctl disable --now hexwall # stop it and remove it from boot
 
 Linux with systemd only.
 
+### Uninstall
+
+```sh
+sudo hexwall uninstall
+```
+
+Undoes `install-service` and `zeek-setup`: it stops, disables and deletes the units hexwall wrote, removes the `@load dns-bypass` lines from `local.zeek`, and deletes the script. Only files carrying hexwall's signature are touched, so a `zeek.service` or `dns-bypass.zeek` someone else wrote is left in place. Changes you made yourself, such as the interface in `node.cfg`, stay.
+
+Two things are kept on purpose: `/var/lib/hexwall` (the database with the kill and alert history; delete it with `sudo rm -r /var/lib/hexwall`) and the hexwall binary, which you installed.
+
 ---
 
 ## When a connection is killed

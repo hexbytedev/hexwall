@@ -119,6 +119,14 @@ func run() int {
 		return 0
 	}
 
+	if len(os.Args) > 1 && os.Args[1] == "uninstall" {
+		if err := uninstall(); err != nil {
+			fmt.Fprintln(os.Stderr, "uninstall:", err)
+			return 1
+		}
+		return 0
+	}
+
 	cfg, err := parseFlags(os.Args[1:])
 	if errors.Is(err, flag.ErrHelp) {
 		return 0
@@ -398,5 +406,27 @@ func installService(args []string) error {
 	if cfg.mode == monitor.ModeWatch {
 		fmt.Println("\nRunning in watch mode: nothing is killed. Re-run with --mode enforce once the logs look right.")
 	}
+	return nil
+}
+
+// uninstall removes what install-service and zeek-setup added. The database (the kill and
+// alert audit trail) and the binary are kept: hexwall didn't install the binary, and
+// deleting evidence should be a separate, deliberate step.
+func uninstall() error {
+	if runtime.GOOS != "linux" {
+		return errors.New("only Linux with systemd is supported")
+	}
+	// Services first, so Zeek stops before its script is removed.
+	if err := service.Uninstall(os.Stdout); err != nil {
+		return err
+	}
+	if err := zeek.Teardown(os.Stdout); err != nil {
+		return err
+	}
+	fmt.Println(`
+Kept on purpose:
+  /var/lib/hexwall   the service's database, with its kill and alert history
+                     (delete it with: sudo rm -r /var/lib/hexwall)
+  this binary        delete it yourself if you installed it (e.g. /usr/local/bin/hexwall)`)
 	return nil
 }

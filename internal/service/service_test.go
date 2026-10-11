@@ -130,3 +130,40 @@ func TestInstall_WithoutZeek(t *testing.T) {
 		t.Fatalf("zeek.service enabled although hexwall doesn't use Zeek: %q", systemctl.calls)
 	}
 }
+
+func TestUninstall_RemovesOnlyHexwallsUnits(t *testing.T) {
+	dir := t.TempDir()
+	if err := install(&bytes.Buffer{}, Options{Binary: "/x"}, dir, nil, (&fakeSystemctl{}).run); err != nil {
+		t.Fatal(err)
+	}
+	foreign := "[Service]\nExecStart=/usr/bin/zeek -i eth1\n"
+	if err := os.WriteFile(filepath.Join(dir, zeekUnit), []byte(foreign), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	systemctl := &fakeSystemctl{}
+	if err := uninstall(&bytes.Buffer{}, dir, systemctl.run); err != nil {
+		t.Fatalf("uninstall() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, hexwallUnit)); !os.IsNotExist(err) {
+		t.Fatalf("hexwall.service still there (err %v)", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, zeekUnit)); string(got) != foreign {
+		t.Fatalf("foreign zeek.service changed:\n%s", got)
+	}
+	want := []string{"disable --now hexwall.service", "daemon-reload"}
+	if !slices.Equal(systemctl.calls, want) {
+		t.Fatalf("systemctl calls = %q, want %q", systemctl.calls, want)
+	}
+}
+
+func TestUninstall_NothingInstalled(t *testing.T) {
+	systemctl := &fakeSystemctl{}
+	if err := uninstall(&bytes.Buffer{}, t.TempDir(), systemctl.run); err != nil {
+		t.Fatalf("uninstall() error = %v", err)
+	}
+	if len(systemctl.calls) != 0 {
+		t.Fatalf("systemctl called with nothing installed: %q", systemctl.calls)
+	}
+}

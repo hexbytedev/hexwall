@@ -62,6 +62,8 @@ You can download them from the project's GitHub Releases page:
 
 For production Linux servers, download the matching binary from Releases, place it where your deployment expects `./app/hexwall`, and use the included demo Docker Compose file at [`docker-compose.yml`](./docker-compose.yml) to launch it on the server.
 
+To run hexwall directly on the host instead, so that it starts at boot and restarts if it crashes, use [`hexwall install-service`](#run-as-a-systemd-service).
+
 hexwall targets Linux, where prebuilt binaries are published by CI. macOS is best-effort: clone the repository and build the binary manually, and install `somo` as a fallback since `ss` (Linux's iproute2) isn't available there. Windows is not supported.
 
 ### Connection backend
@@ -114,8 +116,8 @@ If neither is found, start fails. Use `--db` to specify the path manually.
 | `--enable-zeek`           | `false`                             | Enable the Zeek `notice.log` DNS-bypass alert path (independent of `--zeek-log`)                  |
 | `--zeek-log`              | _(unset — SNI matching skipped)_    | Path to Zeek's `ssl.log`, used to match a connection's TLS SNI against Pi-hole's allow/deny lists |
 | `--zeek-notice-log`       | `/opt/zeek/logs/current/notice.log` | Path to Zeek's `notice.log`; only read when `--enable-zeek` is set                                |
-| `--enable-deghost-ip`     | `true`                              | Enable third-party IP reputation checks for unrecognized connections with no SNI                  |
-| `--enable-deghost-domain` | `true`                              | Enable third-party domain reputation checks for unrecognized SNI domains                          |
+| `--enable-deghost-ip`     | `false`                             | Send unrecognized IPs (connections with no SNI) to the third-party reputation API                 |
+| `--enable-deghost-domain` | `false`                             | Send unrecognized SNI domains to the third-party reputation API                                   |
 | `--version`               | `false`                             | Print version and exit                                                                            |
 
 `--mode` accepts `watch` or `enforce` (case-insensitive). Any other value exits with an error.
@@ -124,12 +126,40 @@ If neither is found, start fails. Use `--db` to specify the path manually.
 
 ### Zeek setup
 
-hexwall tails `ssl.log` directly, in whichever of Zeek's two output formats it's actually producing — no Zeek-side configuration is required:
+hexwall reads two Zeek logs, in whichever of Zeek's two output formats Zeek is producing:
 
-- **TSV** (Zeek's default `LogAscii` output, used by a stock install with no extra config) — the column order is learned from the log file's own `#fields` header the first time it's read, rather than assumed, so it keeps working across Zeek versions or configurations that add extra columns.
+- **TSV** (Zeek's default `LogAscii` output, used by a stock install with no extra config) — the column order is learned from the log file's own `#fields` header rather than assumed, so it keeps working across Zeek versions or configurations that add extra columns.
 - **JSON** (`redef LogAscii::use_json = T;`) — also supported, parsed line by line.
 
-Tested against Zeek 9.0.0. Point `--zeek-log` at the running instance's `ssl.log`: for a plain `zeek -i <interface>` invocation, that's a file in the working directory Zeek was started from; under `zeekctl`, it's `<logdir>/current/ssl.log`.
+Tested against Zeek 9.0.0.
+
+`ssl.log` (for `--zeek-log`) is written by every Zeek install; nothing needs configuring. `notice.log` alerts (for `--enable-zeek`) come from a DNS-bypass detection script that ships inside the hexwall binary. Install it with:
+
+```sh
+sudo hexwall zeek-setup
+```
+
+`zeek-setup` finds Zeek through `zeek-config` (on `PATH`, or `/opt/zeek/bin/zeek-config`), then:
+
+1. writes `dns-bypass.zeek` into Zeek's site directory, replacing an older copy so the script always matches the hexwall binary that reads its alerts;
+2. adds `@load dns-bypass` to `local.zeek` once, leaving the rest of the file alone;
+3. checks that every `interface=` in `node.cfg` exists on this machine, and lists the real interfaces if one doesn't (Zeek can't start on a missing interface; the stock `node.cfg` says `eth0`);
+4. prints the next steps: `sudo zeekctl deploy` to restart Zeek with the script, and the exact `--zeek-log`/`--zeek-notice-log` flags for the configured log directory.
+
+It does not edit `node.cfg` or restart Zeek itself. Re-running it is safe.
+
+Under `zeekctl`, both logs are in `<logdir>/current/` (`/opt/zeek/logs/current/` by default). For a plain `zeek -i <interface>` invocation, they're written to the directory Zeek was started from.
+
+Both logs are read from the moment hexwall starts: alerts already in `notice.log` are skipped, so a restart can't act on old ones, and SNI is only known for TLS handshakes made after startup.
+
+### DNS-bypass alerts
+
+The script raises a `DNSBypass::PossibleBypass` notice when a TLS connection's SNI names a domain that the client never looked up through DNS, a sign that it bypassed Pi-hole. For each alert hexwall checks the domain against Pi-hole's lists and records it in the `zeek_alerts` table. If the domain is blocked:
+
+- in `--mode watch`, the alert is logged;
+- in `--mode enforce`, hexwall looks for the alerted connection among **this machine's** sockets and kills it through the same guarded path as every other kill (see [When a connection is killed](#when-a-connection-is-killed)).
+
+Zeek sees the whole network it listens on, but a socket can only be closed on the machine that owns it. An alert about another device is recorded as `not_on_this_host` with a warning; to block that device's connection, run hexwall on it too.
 
 ### Debug logging
 
@@ -137,22 +167,52 @@ When `--debug` is enabled, hexwall also logs intermediate, non-actionable outcom
 
 Every scan tick prints a one-line summary regardless of `--debug` — connection count, and how many were trusted, blocked, unknown, or errored — and an empty scan (the connection-listing tool returning zero connections) is always logged too.
 
+### Run as a systemd service
+
+```sh
+sudo hexwall install-service [hexwall flags...]
+# e.g.
+sudo /usr/local/bin/hexwall install-service --zeek-log /opt/zeek/logs/current/ssl.log --enable-zeek
+```
+
+This makes hexwall start at boot and restart if it crashes. The flags after `install-service` are the ones the service runs with, and they're checked first, so a typo fails here instead of making the service crash at every boot. Then it:
+
+1. writes `/etc/systemd/system/hexwall.service`, running this binary (by its absolute path) with those flags from `/var/lib/hexwall`, where the default `./hexwall.db` is created;
+2. if the flags use Zeek (`--zeek-log` or `--enable-zeek`), writes a `zeek.service` that runs `zeekctl deploy` at boot and `zeekctl stop` on shutdown, and orders hexwall after it. A `zeek.service` that hexwall didn't write (from a package, or written by hand) is left untouched and used as is;
+3. runs `systemctl daemon-reload`, enables both units, and (re)starts hexwall.
+
+**The service runs in `--mode watch` unless you pass `--mode` yourself.** A service starts before anyone is watching, so killing has to be switched on deliberately: check the logs first, then re-run `install-service` with `--mode enforce`.
+
+Re-running `install-service` updates the units. Build hexwall before you run it: the binary that `go run` makes is deleted when it exits, so it's refused.
+
+```sh
+systemctl status hexwall             # is it running?
+journalctl -u hexwall -f             # follow its logs
+sudo systemctl disable --now hexwall # stop it and remove it from boot
+```
+
+Linux with systemd only.
+
 ---
 
 ## When a connection is killed
 
-A connection is only ever killed in `--mode enforce`, for a connection the active connection-listing tool (`ss` or `somo`) reports as currently established. Three independent checks can trigger it:
+A connection is only ever killed in `--mode enforce`, for a connection the active connection-listing tool (`ss` or `somo`) reports as currently established. Four independent checks can trigger it:
 
-1. **Pi-hole domain denylist match** — Zeek captured the connection's TLS SNI (via `--zeek-log`) and that domain is on Pi-hole's own denylist or gravity blocklist. Requires only Pi-hole; no third-party service is involved, and this check runs regardless of the `--enable-deghost-*` flags.
-2. **Third-party domain reputation match** — an SNI was captured, the domain is on neither Pi-hole list and isn't already known-trusted for this IP, and the reputation API's verdict (fetched live or reused from a 6-hour cache) says to block it. Requires `--enable-deghost-domain` (default `true`).
-3. **Third-party IP reputation match** — no SNI was available at all (non-TLS traffic, ECH, or a connection predating startup), the IP is not trusted, and the reputation API's verdict on the bare IP (live or 6-hour cached) marks it `is_abuser`, `is_attacker`, or `is_threat`. Requires `--enable-deghost-ip` (default `true`).
+1. **Pi-hole domain denylist match** — Zeek captured the connection's TLS SNI (via `--zeek-log`) and that domain is on Pi-hole's own denylist, a regex denylist entry, or the gravity blocklist. Requires only Pi-hole; no third-party service is involved, and this check runs regardless of the `--enable-deghost-*` flags.
+2. **Third-party domain reputation match** — an SNI was captured, the domain is on neither Pi-hole list and isn't already known-trusted for this IP, and the reputation API's verdict (fetched live or reused from a 6-hour cache) says to block it. Requires `--enable-deghost-domain` (default `false`).
+3. **Third-party IP reputation match** — no SNI was available at all (non-TLS traffic, ECH, or a connection predating startup), the IP is not trusted, and the reputation API's verdict on the bare IP (live or 6-hour cached) marks it `is_abuser`, `is_attacker`, or `is_threat`. Requires `--enable-deghost-ip` (default `false`).
 
-With both `--enable-deghost-ip` and `--enable-deghost-domain` set to `false`, only the first check — Pi-hole's own denylist — can ever trigger a kill.
+4. **Zeek DNS-bypass alert for a blocked domain** — Zeek raised a bypass alert (`--enable-zeek`), the domain is blocked by Pi-hole's lists, and the alerted connection is on this machine. See [DNS-bypass alerts](#dns-bypass-alerts).
+
+Both `--enable-deghost-*` flags default to `false`, because they send connection data off the machine. With the defaults, only the Pi-hole checks (1 and 4) can trigger a kill, and both need Zeek. So `--mode enforce` without `--zeek-log` kills nothing unless you opt in to `--enable-deghost-ip`; hexwall warns about this at startup.
+
+Pi-hole regex entries are matched the way Pi-hole matches them: case-insensitive, with `;invert` honoured. Options hexwall can't evaluate for a connection (`;querytype=`, `;reply=`, unknown ones) resolve toward not killing: an allow rule with them still applies, and a deny rule with them is skipped. Regex lists are reloaded on the 30-second refresh, so edits in Pi-hole take effect without a restart.
 
 A connection is treated as trusted, and skipped entirely, when any of these are true:
 
 - Its IP matches the built-in CIDR allowlist.
-- Its domain is explicitly on Pi-hole's allowlist.
+- Its domain is on Pi-hole's allowlist (exact or regex).
 - Its IP was refreshed from Pi-hole query history within the last hour, or was already seen as an established connection within the last 60 seconds.
 - Its domain has already been seen for this exact IP in hexwall's own history.
 
@@ -188,10 +248,10 @@ This cache lives in the local hexwall database as Unix timestamps (`INTEGER` / i
 Pi-hole trust is built from recent DNS history, not by directly trusting every current connection. The refresh flow is:
 
 1. Read the `queries` table from `pihole-FTL.db`.
-2. Select distinct non-empty domains seen within the last hour.
+2. Select distinct non-empty domains seen within the last hour **that Pi-hole answered**. Queries Pi-hole blocked are skipped, so a blocked domain's IP never becomes trusted, even if the host's resolver could look it up through another nameserver. Only the FTL statuses known to mean "answered" (forwarded, cached, retried, and their variants) count; a status hexwall doesn't recognise counts as not answered.
 3. Normalize them to lowercase and trim whitespace.
 4. Resolve each domain through the system DNS resolver, with bounded concurrency and a 1 second lookup timeout per domain.
-5. Ignore domains that do not resolve. This is normal for blocked domains, expired records, and similar cases.
+5. Ignore domains that do not resolve, such as expired records.
 6. Deduplicate resolved IPs. If multiple domains resolve to the same IP, the first domain in sorted order is stored for that IP.
 7. Upsert each resolved IP into the local `allowed_ips` table, setting or refreshing `last_refreshed`.
 

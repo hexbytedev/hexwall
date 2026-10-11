@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	// Register the pure-Go SQLite driver used to read the Pi-hole FTL database.
@@ -27,6 +28,9 @@ type Config struct {
 type Checker struct {
 	db        *sql.DB
 	gravityDB *sql.DB
+
+	// regex is swapped whole by RefreshRegexLists while scans read it from another goroutine.
+	regex atomic.Pointer[regexLists]
 }
 
 const domainLookback = time.Hour
@@ -83,10 +87,15 @@ func NewChecker(config *Config) (*Checker, error) {
 			"path", gravityPath, "err", err)
 	}
 
-	return &Checker{
+	checker := &Checker{
 		db:        db,
 		gravityDB: gravityDB,
-	}, nil
+	}
+	if err := checker.RefreshRegexLists(); err != nil {
+		slog.Warn("pi-hole regex lists unavailable; only exact-match policy checks apply", "err", err)
+	}
+
+	return checker, nil
 }
 
 // openGravityDB opens the Pi-hole gravity database in read-only mode.
@@ -160,7 +169,7 @@ func (c *Checker) IsDomainKnown(domain string) (bool, error) {
 	return true, nil
 }
 
-// IsAllowedByPolicy reports whether the domain currently appears in Pi-hole's allowlist.
+// IsAllowedByPolicy reports whether the domain is on Pi-hole's allowlist or matches an allow regex.
 func (c *Checker) IsAllowedByPolicy(domain string) (bool, error) {
 	domain = normalizeDomain(domain)
 	if domain == "" {
@@ -177,7 +186,7 @@ func (c *Checker) IsAllowedByPolicy(domain string) (bool, error) {
 		LIMIT 1
 	`, domain).Scan(&found)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return c.matchesRegex(domain, true), nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("allowlist lookup failed: %w", err)
@@ -186,7 +195,7 @@ func (c *Checker) IsAllowedByPolicy(domain string) (bool, error) {
 	return true, nil
 }
 
-// IsBlockedByPolicy reports whether the domain currently matches a Pi-hole denylist or gravity entry.
+// IsBlockedByPolicy reports whether the domain is on Pi-hole's denylist or gravity, or matches a deny regex.
 func (c *Checker) IsBlockedByPolicy(domain string) (bool, error) {
 	domain = normalizeDomain(domain)
 	if domain == "" {
@@ -215,7 +224,7 @@ func (c *Checker) IsBlockedByPolicy(domain string) (bool, error) {
 		LIMIT 1
 	`, domain).Scan(&found)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return c.matchesRegex(domain, false), nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("gravity lookup failed: %w", err)

@@ -278,6 +278,9 @@ func run() int {
 				return
 			case <-ticker.C:
 				cache.Refresh(ctx)
+				if err := checker.RefreshRegexLists(); err != nil {
+					slog.Warn("pi-hole regex list refresh failed; keeping previous rules", "err", err)
+				}
 			}
 		}
 	}()

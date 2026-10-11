@@ -57,8 +57,8 @@ func parseFlags() (*runConfig, error) {
 	zeekLogPath := flag.String("zeek-log", "", "path to zeek ssl.log for SNI-based domain verification (empty to skip)")
 	zeekNoticeLog := flag.String("zeek-notice-log", "/opt/zeek/logs/current/notice.log", "path to Zeek notice.log for DNS-bypass alerts")
 	enableZeek := flag.Bool("enable-zeek", false, "enable Zeek-based DNS-bypass detection")
-	enableDeghostIP := flag.Bool("enable-deghost-ip", true, "enable third-party IP reputation checks on the IP-only fallback path")
-	enableDeghostDomain := flag.Bool("enable-deghost-domain", true, "enable third-party domain reputation checks at rung 6")
+	enableDeghostIP := flag.Bool("enable-deghost-ip", false, "send unrecognized IPs to the third-party reputation API (deghostapi.hexbyte.dev) on the IP-only fallback path")
+	enableDeghostDomain := flag.Bool("enable-deghost-domain", false, "send unrecognized SNI domains to the third-party reputation API (deghostapi.hexbyte.dev) at rung 6")
 	mode := flag.String("mode", monitor.ModeWatch, "monitor mode: watch (detect only) or enforce (kill + log)")
 	debug := flag.Bool("debug", false, "enable debug-level logging, including verbose per-connection scan logging")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -226,6 +226,12 @@ func run() int {
 		deghostClient = deghost.NewClient(deghostBaseURL, deghostTimeout)
 	} else {
 		slog.Info("deghost disabled; unrecognized connections will not be escalated to third-party API")
+	}
+
+	// Without an SNI source every connection takes the IP-only path, and with IP deghost off
+	// that path never kills: enforce mode would silently protect nothing.
+	if cfg.mode == monitor.ModeEnforce && cfg.zeekLogPath == "" && !cfg.enableDeghostIP {
+		slog.Warn("enforce mode cannot kill any connection: no --zeek-log for Pi-hole rule matching and --enable-deghost-ip is off")
 	}
 
 	if cfg.mode == monitor.ModeEnforce && cfg.enableDeghostIP {

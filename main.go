@@ -3,11 +3,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -18,6 +20,7 @@ import (
 	"github.com/hexbytedev/hexwall/internal/detector"
 	"github.com/hexbytedev/hexwall/internal/monitor"
 	"github.com/hexbytedev/hexwall/internal/pihole"
+	"github.com/hexbytedev/hexwall/internal/service"
 	"github.com/hexbytedev/hexwall/internal/store"
 	"github.com/hexbytedev/hexwall/internal/zeek"
 )
@@ -51,18 +54,22 @@ func main() {
 	os.Exit(run())
 }
 
-func parseFlags() (*runConfig, error) {
-	dbPath := flag.String("db", "", "path to pihole-FTL.db (auto-detected if not set)")
-	hexwallDB := flag.String("hexwall-db", "./hexwall.db", "path to local hexwall database")
-	zeekLogPath := flag.String("zeek-log", "", "path to zeek ssl.log for SNI-based domain verification (empty to skip)")
-	zeekNoticeLog := flag.String("zeek-notice-log", "/opt/zeek/logs/current/notice.log", "path to Zeek notice.log for DNS-bypass alerts")
-	enableZeek := flag.Bool("enable-zeek", false, "enable Zeek-based DNS-bypass detection")
-	enableDeghostIP := flag.Bool("enable-deghost-ip", false, "send unrecognized IPs to the third-party reputation API (deghostapi.hexbyte.dev) on the IP-only fallback path")
-	enableDeghostDomain := flag.Bool("enable-deghost-domain", false, "send unrecognized SNI domains to the third-party reputation API (deghostapi.hexbyte.dev) at rung 6")
-	mode := flag.String("mode", monitor.ModeWatch, "monitor mode: watch (detect only) or enforce (kill + log)")
-	debug := flag.Bool("debug", false, "enable debug-level logging, including verbose per-connection scan logging")
-	showVersion := flag.Bool("version", false, "print version and exit")
-	flag.Parse()
+// parseFlags parses hexwall's run flags from args (os.Args[1:] in normal use).
+func parseFlags(args []string) (*runConfig, error) {
+	flags := flag.NewFlagSet("hexwall", flag.ContinueOnError)
+	dbPath := flags.String("db", "", "path to pihole-FTL.db (auto-detected if not set)")
+	hexwallDB := flags.String("hexwall-db", "./hexwall.db", "path to local hexwall database")
+	zeekLogPath := flags.String("zeek-log", "", "path to zeek ssl.log for SNI-based domain verification (empty to skip)")
+	zeekNoticeLog := flags.String("zeek-notice-log", "/opt/zeek/logs/current/notice.log", "path to Zeek notice.log for DNS-bypass alerts")
+	enableZeek := flags.Bool("enable-zeek", false, "enable Zeek-based DNS-bypass detection")
+	enableDeghostIP := flags.Bool("enable-deghost-ip", false, "send unrecognized IPs to the third-party reputation API (deghostapi.hexbyte.dev) on the IP-only fallback path")
+	enableDeghostDomain := flags.Bool("enable-deghost-domain", false, "send unrecognized SNI domains to the third-party reputation API (deghostapi.hexbyte.dev) at rung 6")
+	mode := flags.String("mode", monitor.ModeWatch, "monitor mode: watch (detect only) or enforce (kill + log)")
+	debug := flags.Bool("debug", false, "enable debug-level logging, including verbose per-connection scan logging")
+	showVersion := flags.Bool("version", false, "print version and exit")
+	if err := flags.Parse(args); err != nil {
+		return nil, err
+	}
 
 	cfg := &runConfig{
 		dbPath:              strings.TrimSpace(*dbPath),
@@ -104,8 +111,18 @@ func run() int {
 		}
 		return 0
 	}
+	if len(os.Args) > 1 && os.Args[1] == "install-service" {
+		if err := installService(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "install-service:", err)
+			return 1
+		}
+		return 0
+	}
 
-	cfg, err := parseFlags()
+	cfg, err := parseFlags(os.Args[1:])
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
 	if err != nil {
 		slog.Error(err.Error())
 		return 1
@@ -344,4 +361,42 @@ func run() int {
 			scanner.Run(ctx)
 		}
 	}
+}
+
+// installService installs the systemd units that run hexwall with args at every boot.
+func installService(args []string) error {
+	if runtime.GOOS != "linux" {
+		return errors.New("only Linux with systemd is supported")
+	}
+	args = service.WithSafeMode(args)
+	// Reject bad flags now: in a unit they would crash-loop at every boot instead.
+	cfg, err := parseFlags(args)
+	if err != nil {
+		return err
+	}
+
+	binary, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if binary, err = filepath.EvalSymlinks(binary); err != nil {
+		return err
+	}
+	if strings.Contains(binary, "go-build") {
+		return errors.New("this binary is temporary (go run); build hexwall and run the built binary instead")
+	}
+
+	opts := service.Options{Binary: binary, Args: args}
+	if cfg.enableZeek || cfg.zeekLogPath != "" {
+		if opts.Zeekctl, err = zeek.Zeekctl(); err != nil {
+			return err
+		}
+	}
+	if err := service.Install(os.Stdout, opts); err != nil {
+		return err
+	}
+	if cfg.mode == monitor.ModeWatch {
+		fmt.Println("\nRunning in watch mode: nothing is killed. Re-run with --mode enforce once the logs look right.")
+	}
+	return nil
 }

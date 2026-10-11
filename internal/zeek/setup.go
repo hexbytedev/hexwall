@@ -86,6 +86,19 @@ Next steps:
 	return nil
 }
 
+// Zeekctl returns the path of the local Zeek's zeekctl, located through zeek-config.
+func Zeekctl() (string, error) {
+	zeekConfig, err := findZeekConfig()
+	if err != nil {
+		return "", err
+	}
+	prefix, err := zeekConfigValue(zeekConfig, "--prefix")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(prefix, "bin", "zeekctl"), nil
+}
+
 func findZeekConfig() (string, error) {
 	if path, err := exec.LookPath("zeek-config"); err == nil {
 		return path, nil

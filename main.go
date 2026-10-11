@@ -95,6 +95,16 @@ func parseFlags() (*runConfig, error) {
 }
 
 func run() int {
+	// `hexwall zeek-setup` installs the Zeek script whose notices hexwall reads, so the
+	// script always matches this binary's parser.
+	if len(os.Args) > 1 && os.Args[1] == "zeek-setup" {
+		if err := zeek.Setup(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "zeek-setup:", err)
+			return 1
+		}
+		return 0
+	}
+
 	cfg, err := parseFlags()
 	if err != nil {
 		slog.Error(err.Error())

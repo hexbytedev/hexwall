@@ -31,7 +31,7 @@ In short: `Pi-hole + hexwall` gives you a practical containment layer for post-c
 
 Pi-hole operates at the DNS layer. It can block a domain, but it has no visibility into connections that bypass DNS entirely — processes that dial a hard-coded IP address directly. Malware and compromised packages commonly use this technique to phone home without triggering any DNS-based block.
 
-hexwall works from the inverse assumption: **if a connection is not trusted, it is suspicious by default.** Trust is granted when the IP matches the built-in CIDR allowlist, was refreshed from Pi-hole query history within the last hour, or was already observed as an established connection within the last 60 seconds. On startup it immediately refreshes trusted IPs from Pi-hole, then refreshes them every 30 seconds while scanning connections every 10 seconds.
+hexwall works from the inverse assumption: **if a connection is not trusted, it is suspicious by default.** Trust is granted when the IP matches the built-in CIDR allowlist, was resolved from a domain a client asked Pi-hole for within the last hour, or was already observed as an established connection within the last 60 seconds. On startup it immediately reads the last hour of Pi-hole history, then picks up new queries every 30 seconds while scanning connections every 10 seconds.
 
 When Zeek is enabled (`--zeek-log`), hexwall also captures the TLS SNI for each connection and checks that exact domain against Pi-hole's own allow/deny lists before ever falling back to third-party reputation — this is what lets it tell apart a blocked site from a harmless one even when both happen to share the same IP, as is common behind a CDN. Anything that still falls outside every trust check is optionally escalated to an external reputation API, with results cached locally for 6 hours. Confirmed threats are either logged (watch mode) or killed (enforce mode).
 
@@ -223,7 +223,7 @@ A connection is treated as trusted, and skipped entirely, when any of these are 
 
 - Its IP matches the built-in CIDR allowlist.
 - Its domain is on Pi-hole's allowlist (exact or regex).
-- Its IP was refreshed from Pi-hole query history within the last hour, or was already seen as an established connection within the last 60 seconds.
+- Its IP was resolved from a domain a client asked Pi-hole for within the last hour, or was already seen as an established connection within the last 60 seconds.
 - Its domain has already been seen for this exact IP in hexwall's own history.
 
 Connections are not killed in these cases:
@@ -257,29 +257,31 @@ This cache lives in the local hexwall database as Unix timestamps (`INTEGER` / i
 
 Pi-hole trust is built from recent DNS history, not by directly trusting every current connection. The refresh flow is:
 
-1. Read the `queries` table from `pihole-FTL.db`.
-2. Select distinct non-empty domains seen within the last hour **that Pi-hole answered**. Queries Pi-hole blocked are skipped, so a blocked domain's IP never becomes trusted, even if the host's resolver could look it up through another nameserver. Only the FTL statuses known to mean "answered" (forwarded, cached, retried, and their variants) count; a status hexwall doesn't recognise counts as not answered.
+1. Read the queries logged in `pihole-FTL.db` since the previous refresh (the last hour, on the first refresh). Each query is read once, tracked by its id.
+2. Keep the non-empty domains **that Pi-hole answered**. Queries Pi-hole blocked are skipped, so a blocked domain's IP never becomes trusted, even if the host's resolver could look it up through another nameserver. Only the FTL statuses known to mean "answered" (forwarded, cached, retried, and their variants) count; a status hexwall doesn't recognise counts as not answered.
 3. Normalize them to lowercase and trim whitespace.
 4. Resolve each domain through the system DNS resolver, with bounded concurrency and a 1 second lookup timeout per domain.
 5. Ignore domains that do not resolve, such as expired records.
+   If the host's resolver is Pi-hole itself, these lookups are logged as queries too. hexwall remembers when it looked up each domain and skips the logged query that matches, so its own lookups never count as a client asking again. Without that, every domain would stay "recently seen", and trusted, forever.
 6. Deduplicate resolved IPs. If multiple domains resolve to the same IP, the first domain in sorted order is stored for that IP.
 7. Upsert each resolved IP into the local `allowed_ips` table, setting or refreshing `last_refreshed`.
 
 Important details:
 
 - Startup performs this refresh immediately before the first monitoring scan, so normal traffic seen in recent Pi-hole history is trusted before enforcement begins.
-- The refresh repeats every 30 seconds.
-- Trust from Pi-hole refresh lasts for 1 hour from the most recent successful upsert.
+- The refresh repeats every 30 seconds, and only resolves domains clients asked for since the previous one.
+- Trust from Pi-hole lasts for 1 hour from the most recent successful upsert, which is shortly after a client last asked for one of the IP's domains.
+- If Pi-hole's query log is flushed or recreated (its ids restart), hexwall notices and re-reads the last hour.
 - Existing rows keep their original `first_approved` and `last_established` values when refreshed; only the stored domain and `last_refreshed` timestamp are updated.
 - The monitor also extends trust for long-lived allowed connections by updating `last_established` whenever an already-trusted connection is seen still established.
 
 This means an IP becomes trusted from Pi-hole history only after all of these happen:
 
-1. Pi-hole recorded a domain query for it within the last hour.
-2. That domain still resolves during a refresh cycle.
+1. A client asked Pi-hole for one of its domains, and Pi-hole answered.
+2. That domain still resolves at the next refresh.
 3. One of the resolved IPs is written into the local `allowed_ips` cache.
 
-If a domain was seen in Pi-hole history but no longer resolves during refresh, no IP is added for it, so there is nothing to trust from that domain alone.
+If a domain was seen in Pi-hole history but doesn't resolve at the refresh, no IP is added for it, so there is nothing to trust from that domain alone.
 
 ---
 

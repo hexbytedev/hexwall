@@ -272,24 +272,33 @@ var answeredStatuses = []int{
 	17, // answered from stale cache
 }
 
-// DomainsSeenSince returns the distinct domains Pi-hole answered since the given Unix timestamp.
-// Queries Pi-hole blocked are excluded; see answeredStatuses.
-func (c *Checker) DomainsSeenSince(since int64) ([]string, error) {
+// AnsweredQuery is one query from Pi-hole's log that Pi-hole answered.
+type AnsweredQuery struct {
+	ID        int64
+	Domain    string
+	Timestamp time.Time
+}
+
+// AnsweredQueriesAfter returns the queries Pi-hole answered with an id above afterID and a
+// timestamp at or after since (Unix seconds), in id order. Queries Pi-hole blocked are
+// excluded; see answeredStatuses.
+func (c *Checker) AnsweredQueriesAfter(afterID, since int64) ([]AnsweredQuery, error) {
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(answeredStatuses)), ",")
-	args := make([]any, 0, len(answeredStatuses)+1)
-	args = append(args, since)
+	args := make([]any, 0, len(answeredStatuses)+2)
+	args = append(args, afterID, since)
 	for _, status := range answeredStatuses {
 		args = append(args, status)
 	}
 
 	rows, err := c.db.Query(fmt.Sprintf(`
-		SELECT DISTINCT LOWER(TRIM(domain))
+		SELECT id, LOWER(TRIM(domain)), timestamp
 		FROM queries
-		WHERE timestamp >= ?
+		WHERE id > ?
+		  AND timestamp >= ?
 		  AND domain IS NOT NULL
 		  AND TRIM(domain) <> ''
 		  AND status IN (%s)
-		ORDER BY LOWER(TRIM(domain))
+		ORDER BY id
 	`, placeholders), args...)
 	if err != nil {
 		return nil, fmt.Errorf("database query failed: %w", err)
@@ -298,24 +307,30 @@ func (c *Checker) DomainsSeenSince(since int64) ([]string, error) {
 		_ = rows.Close()
 	}()
 
-	var domains []string
+	var queries []AnsweredQuery
 	for rows.Next() {
-		var domain string
-		if err := rows.Scan(&domain); err != nil {
+		var q AnsweredQuery
+		var timestamp float64 // FTL v6 stores fractional seconds
+		if err := rows.Scan(&q.ID, &q.Domain, &timestamp); err != nil {
 			return nil, fmt.Errorf("scan failed: %w", err)
 		}
-
-		if domain == "" {
-			continue
-		}
-		domains = append(domains, domain)
+		q.Timestamp = time.Unix(0, int64(timestamp*float64(time.Second)))
+		queries = append(queries, q)
 	}
-
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows iteration failed: %w", err)
 	}
+	return queries, nil
+}
 
-	return domains, nil
+// MaxQueryID returns the highest id in Pi-hole's query log, or 0 when it is empty. It drops
+// below an id seen earlier only when the log was flushed or recreated.
+func (c *Checker) MaxQueryID() (int64, error) {
+	var maxID sql.NullInt64
+	if err := c.db.QueryRow(`SELECT MAX(id) FROM queries`).Scan(&maxID); err != nil {
+		return 0, fmt.Errorf("database query failed: %w", err)
+	}
+	return maxID.Int64, nil
 }
 
 // DomainMatches reports whether an observed SNI domain corresponds to a known domain,

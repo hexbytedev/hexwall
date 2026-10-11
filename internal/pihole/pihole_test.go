@@ -27,11 +27,11 @@ func TestSQLiteReadOnlyDSNAbsolutePath(t *testing.T) {
 	}
 }
 
-// TestDomainsSeenSinceExcludesBlocked pins the trust-cache input: a domain Pi-hole blocked
+// TestAnsweredQueriesAfterExcludesBlocked pins the trust-cache input: a domain Pi-hole blocked
 // is still in the query log, and must not come back as a domain to resolve and trust.
 // Statuses 2, 3 and 17 are the ones a real Pi-hole (FTL v6.7.1) logged for answered queries;
 // 1 is what it logged for a gravity-blocked domain.
-func TestDomainsSeenSinceExcludesBlocked(t *testing.T) {
+func TestAnsweredQueriesAfterExcludesBlocked(t *testing.T) {
 	t.Parallel()
 
 	checker := newTestChecker(t, "")
@@ -57,13 +57,26 @@ func TestDomainsSeenSinceExcludesBlocked(t *testing.T) {
 		}
 	}
 
-	got, err := checker.DomainsSeenSince(now - 60)
+	queries, err := checker.AnsweredQueriesAfter(0, now-60)
 	if err != nil {
-		t.Fatalf("DomainsSeenSince() error: %v", err)
+		t.Fatalf("AnsweredQueriesAfter() error: %v", err)
+	}
+	var got []string
+	for _, q := range queries {
+		got = append(got, q.Domain)
 	}
 
-	want := []string{"cached.example", "forwarded.example", "stale-cache.example"}
+	want := []string{"forwarded.example", "cached.example", "stale-cache.example"}
 	if !slices.Equal(got, want) {
-		t.Fatalf("DomainsSeenSince() = %v, want %v", got, want)
+		t.Fatalf("AnsweredQueriesAfter() domains = %v, want %v", got, want)
+	}
+
+	// The cursor: nothing after the last id read.
+	maxID, err := checker.MaxQueryID()
+	if err != nil {
+		t.Fatalf("MaxQueryID() error: %v", err)
+	}
+	if rest, err := checker.AnsweredQueriesAfter(maxID, now-60); err != nil || len(rest) != 0 {
+		t.Fatalf("AnsweredQueriesAfter(MaxQueryID()) = %v, %v; want none", rest, err)
 	}
 }

@@ -1,6 +1,7 @@
 package enforcer
 
 import (
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -162,5 +163,69 @@ func TestSocketStillEstablishedNoMatch(t *testing.T) {
 	}
 	if still {
 		t.Fatal("socketStillEstablished() = true, want false for a tuple that was never connected")
+	}
+}
+
+// ---- KillConnection: guardrails, then ss -K, then the process fallback ----
+
+// noSuchPID is above the kernel's pid_max (at most 2^22), so no process can have it: if a
+// test ever reaches the process fallback, the signal fails with ESRCH instead of hitting
+// a real process.
+const noSuchPID = 1 << 30
+
+// installRecordingSS installs a fake ss that appends each invocation to a log file and
+// answers the recheck with stillThere's connection or with the header alone.
+func installRecordingSS(t *testing.T, stillThere bool) (callLog string) {
+	t.Helper()
+	callLog = filepath.Join(t.TempDir(), "ss-calls")
+	answer := `echo "Recv-Q Send-Q Local Address:Port  Peer Address:Port"`
+	if stillThere {
+		answer = `printf "Recv-Q Send-Q Local Address:Port  Peer Address:Port\n0 0 10.0.0.5:51820 203.0.113.10:443\n"`
+	}
+	installFakeSS(t, "#!/bin/sh\n"+
+		"echo \"$@\" >> '"+callLog+"'\n"+
+		"case \"$1\" in\n"+
+		"  -K) exit 0 ;;\n"+
+		"  -tn) "+answer+" ;;\n"+
+		"esac\n")
+	return callLog
+}
+
+func TestKillConnectionClosesJustTheSocket(t *testing.T) {
+	callLog := installRecordingSS(t, false)
+
+	if err := KillConnection(noSuchPID, "curl", "51820", "203.0.113.10", "443"); err != nil {
+		t.Fatalf("KillConnection() error = %v, want nil: ss -K closed the socket, so no process signal was needed", err)
+	}
+	calls, _ := os.ReadFile(callLog)
+	if !strings.Contains(string(calls), "-K dst 203.0.113.10 dport 443 sport 51820") {
+		t.Fatalf("ss calls = %q, want an ss -K for exactly this connection", calls)
+	}
+}
+
+// When ss -K can't close the socket, KillConnection falls back to signalling the process.
+// noSuchPID makes that signal fail harmlessly; the error proves the fallback ran and is
+// a failure, not a guardrail refusal.
+func TestKillConnectionFallsBackToProcessKill(t *testing.T) {
+	installRecordingSS(t, true)
+
+	err := KillConnection(noSuchPID, "curl", "51820", "203.0.113.10", "443")
+	if err == nil || !strings.Contains(err.Error(), "SIGTERM") {
+		t.Fatalf("KillConnection() error = %v, want the SIGTERM fallback's error", err)
+	}
+	if errors.Is(err, ErrRefused) {
+		t.Fatalf("KillConnection() error = %v is ErrRefused, want a plain failure", err)
+	}
+}
+
+// Guardrails run before anything else: a refused kill never even calls ss.
+func TestKillConnectionRefusedBeforeTouchingSS(t *testing.T) {
+	callLog := installRecordingSS(t, false)
+
+	if err := KillConnection(1, "curl", "51820", "203.0.113.10", "443"); !errors.Is(err, ErrRefused) {
+		t.Fatalf("KillConnection(PID 1) error = %v, want ErrRefused", err)
+	}
+	if _, err := os.Stat(callLog); !os.IsNotExist(err) {
+		t.Fatal("ss was called for a refused kill; guardrails must run first")
 	}
 }

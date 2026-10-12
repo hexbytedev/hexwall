@@ -123,6 +123,11 @@ func (c *Client) Close() {
 // Lookup returns the SNI domain observed for the given connection tuple,
 // or ("", false) if no matching record exists in the cache.
 func (c *Client) Lookup(localPort, remoteIP, remotePort string) (string, bool) {
+	// A nil *Client stored in an interface is not a nil interface, so callers holding one
+	// can't tell it apart from a real client: answer "no SNI" instead of panicking.
+	if c == nil {
+		return "", false
+	}
 	key := localPort + "|" + remoteIP + "|" + remotePort
 
 	c.mu.RLock()

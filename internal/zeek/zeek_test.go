@@ -309,3 +309,12 @@ func TestClientProcessNewLines_TSVRotationRelearnsHeader(t *testing.T) {
 		t.Fatalf("Lookup() after rotation = (%q, %v), want (%q, true)", domain, ok, "post-rotation.example")
 	}
 }
+
+// A nil *Client can sit inside the scanner's SNISource interface; it must answer
+// "no SNI", not panic.
+func TestNilClientLookup(t *testing.T) {
+	var c *Client
+	if sni, ok := c.Lookup("40000", "203.0.113.1", "443"); ok || sni != "" {
+		t.Fatalf("nil Client.Lookup() = %q, %v; want \"\", false", sni, ok)
+	}
+}

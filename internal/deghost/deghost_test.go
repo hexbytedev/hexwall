@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestCheckDomainOK(t *testing.T) {
@@ -280,5 +281,84 @@ func TestShouldBlockDomainSpamAloneDoesNotBlock(t *testing.T) {
 	report := &DomainReport{Status: "allowed", Spam: true}
 	if ShouldBlockDomain(report) {
 		t.Error("ShouldBlockDomain(spam alone) = true, want false")
+	}
+}
+
+func TestCheckIPOK(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"ip":"203.0.113.9","security":{"is_attacker":true}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	report, err := NewClient(srv.URL, time.Second).CheckIP(context.Background(), " 203.0.113.9 ")
+	if err != nil {
+		t.Fatalf("CheckIP() error = %v", err)
+	}
+	if gotPath != "/ip/203.0.113.9" {
+		t.Fatalf("request path = %q, want /ip/203.0.113.9", gotPath)
+	}
+	if report == nil || !report.Security.IsAttacker {
+		t.Fatalf("CheckIP() report = %+v, want is_attacker decoded", report)
+	}
+}
+
+// The API answers 403 for private and reserved IPs; that is a clean verdict, not an error.
+func TestCheckIPForbiddenIsCleanNotError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+
+	report, err := NewClient(srv.URL, time.Second).CheckIP(context.Background(), "10.0.0.1")
+	if err != nil || report != nil {
+		t.Fatalf("CheckIP() = %+v, %v; want nil, nil", report, err)
+	}
+}
+
+// Any other failure is an error, never a verdict: a failed lookup must not become a kill.
+func TestCheckIPErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ip/203.0.113.1" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(`{not json`))
+	}))
+	t.Cleanup(srv.Close)
+	client := NewClient(srv.URL, time.Second)
+
+	for _, ip := range []string{"203.0.113.1", "203.0.113.2", "not-an-ip", ""} {
+		if report, err := client.CheckIP(context.Background(), ip); err == nil || report != nil {
+			t.Errorf("CheckIP(%q) = %+v, %v; want nil report and an error", ip, report, err)
+		}
+	}
+	var nilClient *Client
+	if _, err := nilClient.CheckIP(context.Background(), "203.0.113.1"); err == nil {
+		t.Error("nil client CheckIP() error = nil, want error")
+	}
+}
+
+func TestShouldKill(t *testing.T) {
+	tests := []struct {
+		name     string
+		security SecurityReport
+		want     bool
+	}{
+		{"abuser", SecurityReport{IsAbuser: true}, true},
+		{"attacker", SecurityReport{IsAttacker: true}, true},
+		{"threat", SecurityReport{IsThreat: true}, true},
+		// Anonymity alone is too noisy to kill on: VPN, Tor and cloud users are not attackers.
+		{"vpn, tor, proxy, cloud", SecurityReport{IsVPN: true, IsTor: true, IsProxy: true, IsCloudProvider: true}, false},
+		{"clean", SecurityReport{}, false},
+	}
+	for _, tt := range tests {
+		if got := ShouldKill(&IPReport{Security: tt.security}); got != tt.want {
+			t.Errorf("ShouldKill(%s) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+	if ShouldKill(nil) {
+		t.Error("ShouldKill(nil) = true, want false")
 	}
 }

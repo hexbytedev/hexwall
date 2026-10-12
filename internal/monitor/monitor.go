@@ -35,12 +35,19 @@ type Scanner struct {
 	Checker          *pihole.Checker
 	Store            *store.Store
 	DeghostClient    *deghost.Client
-	ZeekClient       *zeek.Client
+	ZeekClient       SNISource
 	ConnectionLister func() ([]connlist.Connection, error)
 	Mode             string
 	DeghostIP        bool
 	DeghostDomain    bool
 	Debug            bool
+}
+
+// SNISource answers rung 2: which TLS server name did this connection ask for? In
+// production that's *zeek.Client, fed by Zeek's ssl.log; tests use a fixed map, so the
+// SNI rungs can be exercised without a Zeek log file.
+type SNISource interface {
+	Lookup(localPort, remoteIP, remotePort string) (sni string, ok bool)
 }
 
 // scanSummary tracks per-scan outcome counts for the summary line.
@@ -455,12 +462,15 @@ func (s *Scanner) evaluateIPOnly(ctx context.Context, ipStr string, conn connlis
 		if err := s.Store.UpsertFraudCheck(ipStr, false); err != nil {
 			slog.Error("failed to cache fraud check", "ip", ipStr, "program", conn.Program, "err", err)
 		}
+
 		if s.Debug {
 			slog.Info("unknown but clean IP (private/reserved)", "ip", ipStr, "program", conn.Program)
 		}
+
 		if logErr := s.Store.LogIPObservation(ipStr, conn.Program, store.OutcomeIPReserved); logErr != nil {
 			slog.Debug("failed to log ip observation", "ip", ipStr, "err", logErr)
 		}
+
 		return "unknown"
 	}
 
@@ -483,6 +493,7 @@ func (s *Scanner) evaluateIPOnly(ctx context.Context, ipStr string, conn connlis
 	if logErr := s.Store.LogIPObservation(ipStr, conn.Program, store.OutcomeIPBlocked); logErr != nil {
 		slog.Debug("failed to log ip observation", "ip", ipStr, "err", logErr)
 	}
+
 	s.applyBlockedOutcome(ipStr, conn)
 	return "blocked"
 }

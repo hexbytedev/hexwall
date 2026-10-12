@@ -1,6 +1,7 @@
 package zeek
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"slices"
@@ -158,5 +159,96 @@ func TestRemoveScript_OnlyDeletesHexwallsOwn(t *testing.T) {
 
 	if deleted, err := removeScript(filepath.Join(dir, "missing.zeek")); err != nil || deleted {
 		t.Fatalf("removeScript(missing) = %v, %v; want false, nil", deleted, err)
+	}
+}
+
+// fakeZeek builds a Zeek install in a temp dir (site dir with a local.zeek, node.cfg
+// watching iface, zeekctl.cfg) and a fake zeek-config on PATH that points at it.
+func fakeZeek(t *testing.T, iface string) (siteDir, prefix string) {
+	t.Helper()
+	prefix = t.TempDir()
+	siteDir = filepath.Join(prefix, "share", "zeek", "site")
+	for _, dir := range []string{siteDir, filepath.Join(prefix, "etc"), filepath.Join(prefix, "bin")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		filepath.Join(siteDir, "local.zeek"):        "@load misc/detect-traceroute\n",
+		filepath.Join(prefix, "etc", "node.cfg"):    "[zeek]\ntype=standalone\ninterface=" + iface + "\n",
+		filepath.Join(prefix, "etc", "zeekctl.cfg"): "LogDir = " + filepath.Join(prefix, "logs") + "\n",
+		filepath.Join(prefix, "bin", "zeek-config"): "#!/bin/sh\ncase \"$1\" in\n  --site_dir) echo '" + siteDir + "' ;;\n  --prefix) echo '" + prefix + "' ;;\nesac\n",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", filepath.Join(prefix, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return siteDir, prefix
+}
+
+func anyInterface(t *testing.T) string {
+	t.Helper()
+	names := interfaceNames()
+	if len(names) == 0 {
+		t.Skip("no network interfaces")
+	}
+	return names[0]
+}
+
+// The whole user journey: zeek-setup installs and loads the script and prints the right
+// hexwall flags; uninstall's Teardown gives local.zeek back exactly as it was.
+func TestSetupThenTeardown(t *testing.T) {
+	siteDir, prefix := fakeZeek(t, anyInterface(t))
+	original, _ := os.ReadFile(filepath.Join(siteDir, "local.zeek"))
+
+	var out bytes.Buffer
+	if err := Setup(&out); err != nil {
+		t.Fatalf("Setup() error = %v\n%s", err, out.String())
+	}
+	if installed, err := os.ReadFile(filepath.Join(siteDir, scriptName)); err != nil || !bytes.Equal(installed, DNSBypassScript) {
+		t.Fatalf("script not installed (err %v)", err)
+	}
+	for _, want := range []string{
+		filepath.Join(prefix, "bin", "zeekctl") + " deploy",
+		"--zeek-log " + filepath.Join(prefix, "logs", "current", "ssl.log"),
+		"--zeek-notice-log " + filepath.Join(prefix, "logs", "current", "notice.log"),
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("Setup() output is missing %q:\n%s", want, out.String())
+		}
+	}
+
+	if err := Teardown(&bytes.Buffer{}); err != nil {
+		t.Fatalf("Teardown() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(siteDir, scriptName)); !os.IsNotExist(err) {
+		t.Fatalf("script still installed after Teardown (err %v)", err)
+	}
+	if after, _ := os.ReadFile(filepath.Join(siteDir, "local.zeek")); !bytes.Equal(after, original) {
+		t.Fatalf("local.zeek after Setup+Teardown:\n%q\nwant:\n%q", after, original)
+	}
+}
+
+// Zeek can't start on an interface that doesn't exist; Setup must say so and fail.
+func TestSetupReportsMissingInterface(t *testing.T) {
+	fakeZeek(t, "hexwall-test-no-such-if0")
+
+	var out bytes.Buffer
+	err := Setup(&out)
+	if err == nil {
+		t.Fatalf("Setup() error = nil, want an error for a missing interface\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), `"hexwall-test-no-such-if0", which does not exist`) {
+		t.Fatalf("Setup() output doesn't name the missing interface:\n%s", out.String())
+	}
+}
+
+func TestZeekctlFromZeekConfig(t *testing.T) {
+	_, prefix := fakeZeek(t, anyInterface(t))
+	got, err := Zeekctl()
+	if err != nil || got != filepath.Join(prefix, "bin", "zeekctl") {
+		t.Fatalf("Zeekctl() = %q, %v; want %q", got, err, filepath.Join(prefix, "bin", "zeekctl"))
 	}
 }

@@ -1,7 +1,9 @@
 package zeek
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -235,5 +237,45 @@ func TestNoticeTailer_SkipsExistingAlerts(t *testing.T) {
 func TestDNSBypassScriptEmbedded(t *testing.T) {
 	if !strings.Contains(string(DNSBypassScript), "$sub=sni") {
 		t.Fatal("embedded script does not write the SNI to sub, which parseLine reads")
+	}
+}
+
+// The tailer polls every 2 s. A missing notice.log is normal until Zeek's first alert, so
+// "waiting" must be logged once, not on every poll, and the file appearing must be logged.
+// Not parallel: it swaps the default logger.
+func TestNoticeTailer_LogsFileStateOnce(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	path := filepath.Join(t.TempDir(), "notice.log")
+	tailer := &noticeTailer{path: path}
+	events := make(chan Event, 10)
+
+	tailer.skipExisting()
+	for range 5 {
+		tailer.poll(events)
+	}
+	if got := strings.Count(logs.String(), "waiting for notice log"); got != 1 {
+		t.Fatalf("logged 'waiting' %d times over 6 polls, want 1:\n%s", got, logs.String())
+	}
+
+	data, err := os.ReadFile(filepath.Join("testdata", "notice.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		tailer.poll(events)
+	}
+	if got := strings.Count(logs.String(), "notice log found"); got != 1 {
+		t.Fatalf("logged 'found' %d times, want 1:\n%s", got, logs.String())
+	}
+	// Everything in a file that appears after startup is new, so its alert is delivered.
+	if len(events) != 1 {
+		t.Fatalf("got %d events from the newly created file, want 1", len(events))
 	}
 }

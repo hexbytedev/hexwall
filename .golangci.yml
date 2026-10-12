@@ -1,0 +1,13 @@
+version: "2"
+linters:
+  enable:
+    - staticcheck
+    - errcheck
+    - revive
+    # Blank lines split each function into "code paragraphs", one step each.
+    # `golangci-lint run --fix` adds them; CI checks they stay.
+    - wsl_v5
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

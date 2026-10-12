@@ -232,6 +232,13 @@ func run() int {
 		}
 	}
 
+	if groups, err := checker.ExtraGroups(); err != nil {
+		slog.Debug("could not count pi-hole groups", "err", err)
+	} else if groups > 0 {
+		slog.Warn("pi-hole uses groups; hexwall treats a block in any group as a block for this machine, which can be stricter than Pi-hole's own rules for it",
+			"extra_groups", groups)
+	}
+
 	// 4. Open the local hexwall database, creating it if needed.
 	hexwallStore, err := store.NewStore(cfg.hexwallDBPath)
 	if err != nil {

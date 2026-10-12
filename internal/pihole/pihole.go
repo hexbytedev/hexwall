@@ -278,6 +278,23 @@ func (c *Checker) PolicyCounts() (map[string]int64, error) {
 	return counts, nil
 }
 
+// ExtraGroups returns how many enabled Pi-hole groups exist besides Default (id 0).
+// hexwall doesn't know which group this machine's queries fall into, so it treats a
+// block in any group as a block here; with extra groups, that can be stricter than
+// what Pi-hole itself would apply to this machine. Returns 0 if gravity is unavailable.
+func (c *Checker) ExtraGroups() (int, error) {
+	if c == nil || c.gravityDB == nil {
+		return 0, nil
+	}
+
+	var count int
+	if err := c.gravityDB.QueryRow(`SELECT COUNT(*) FROM "group" WHERE id != 0 AND enabled = 1`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count groups: %w", err)
+	}
+
+	return count, nil
+}
+
 // answeredStatuses lists the FTL query status codes that count as "Pi-hole answered this
 // domain". Only these feed the trusted-IP cache. A blocked query is still written to the
 // query log, and without this filter its domain would be re-resolved by the host's own

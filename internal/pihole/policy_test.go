@@ -566,3 +566,38 @@ func TestIsBlockedByPolicy_WhitespaceNormalization(t *testing.T) {
 		t.Fatal("IsBlockedByPolicy() = false, want true with whitespace around domain")
 	}
 }
+
+// Only enabled groups other than Default count: those are the setups where a block may
+// apply to some devices and not to this machine.
+func TestExtraGroups(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		groups string
+		want   int
+	}{
+		{"default only", `(0, 'Default', 1)`, 0},
+		{"one extra, one disabled", `(0, 'Default', 1), (1, 'Kids', 1), (2, 'Old', 0)`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			gravDB, gravPath := openTestGravityDB(t)
+			if _, err := gravDB.Exec(`CREATE TABLE "group" (id INTEGER PRIMARY KEY, enabled INTEGER, name TEXT);
+				INSERT INTO "group" (id, name, enabled) VALUES ` + tc.groups); err != nil {
+				t.Fatal(err)
+			}
+
+			_ = gravDB.Close()
+
+			checker := newTestChecker(t, gravPath)
+			t.Cleanup(func() { _ = checker.Close() })
+
+			got, err := checker.ExtraGroups()
+			if err != nil || got != tc.want {
+				t.Fatalf("ExtraGroups() = %d, %v; want %d, nil", got, err, tc.want)
+			}
+		})
+	}
+}

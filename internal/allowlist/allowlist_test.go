@@ -121,7 +121,7 @@ func TestLoadCIDRs(t *testing.T) {
 		{
 			name:      "loads built in cidrs",
 			values:    cidrs,
-			wantCIDRs: []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.169.254/32"},
+			wantCIDRs: []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16", "fc00::/7", "fe80::/10"},
 		},
 		{
 			name:      "skips invalid entries and keeps valid ones",
@@ -239,5 +239,35 @@ func TestContainsWithNoNetworks(t *testing.T) {
 
 	if Contains(net.ParseIP("127.0.0.1")) {
 		t.Fatal("Contains returned true with empty allowlist")
+	}
+}
+
+// The built-in list, checked at the edges of each range: one address inside the edge must
+// be trusted, the address just outside must not. Public addresses are never trusted.
+func TestBuiltInRangesEdges(t *testing.T) {
+	trusted := []string{
+		"100.64.0.1", "100.127.255.254", // shared space: CGNAT, Tailscale
+		"::ffff:100.101.2.3",             // the same, written as IPv4-mapped IPv6
+		"169.254.1.1", "169.254.169.254", // link-local, cloud metadata
+		"fd7a:115c:a1e0::1", "fc00::1", // IPv6 unique local (the first is Tailscale's)
+		"fe80::9518:1f57:3e8:56d7", // IPv6 link-local
+		"192.168.0.223", "10.0.0.1", "127.0.0.1", "::1",
+	}
+	public := []string{
+		"100.63.255.255", "100.128.0.0", // just outside 100.64.0.0/10
+		"169.253.255.255", "169.255.0.0", // just outside 169.254.0.0/16
+		"fbff::1", "fe00::1", // just outside fc00::/7
+		"fec0::1", // just outside fe80::/10
+		"8.8.8.8", "1.1.1.1", "2001:4860:4860::8888",
+	}
+	for _, addr := range trusted {
+		if !Contains(net.ParseIP(addr)) {
+			t.Errorf("Contains(%s) = false, want true", addr)
+		}
+	}
+	for _, addr := range public {
+		if Contains(net.ParseIP(addr)) {
+			t.Errorf("Contains(%s) = true, want false: it can be a public address", addr)
+		}
 	}
 }

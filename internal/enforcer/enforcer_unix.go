@@ -29,6 +29,7 @@ func terminate(pid int, program string) error {
 
 	// Process still alive — escalate to SIGKILL.
 	slog.Warn("process survived SIGTERM, sending SIGKILL", "pid", pid, "program", program)
+
 	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
 		return fmt.Errorf("send SIGKILL to PID %d: %w", pid, err)
 	}

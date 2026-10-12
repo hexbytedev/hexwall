@@ -13,6 +13,7 @@ func installFakeSS(t *testing.T, script string) {
 	t.Helper()
 
 	dir := t.TempDir()
+
 	path := filepath.Join(dir, "ss")
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake ss: %v", err)
@@ -74,9 +75,11 @@ func TestParseSSOutputUnattributedProcess(t *testing.T) {
 	if len(conns) != 1 {
 		t.Fatalf("parseSSOutput() len = %d, want 1", len(conns))
 	}
+
 	if conns[0].Program != "" || conns[0].PID != "" {
 		t.Fatalf("parseSSOutput()[0] = %+v, want empty Program/PID", conns[0])
 	}
+
 	if conns[0].RAddress != "160.79.104.10" || conns[0].RPort != "443" {
 		t.Fatalf("parseSSOutput()[0] remote = %s:%s, want 160.79.104.10:443", conns[0].RAddress, conns[0].RPort)
 	}
@@ -90,6 +93,7 @@ func TestParseSSOutputMultipleOwners(t *testing.T) {
 	if len(conns) != 1 {
 		t.Fatalf("parseSSOutput() len = %d, want 1", len(conns))
 	}
+
 	if conns[0].Program != "nginx" || conns[0].PID != "100" {
 		t.Fatalf("parseSSOutput()[0] = %+v, want Program=nginx PID=100", conns[0])
 	}
@@ -105,6 +109,7 @@ func TestParseSSOutputSkipsMalformedLines(t *testing.T) {
 	if len(conns) != 1 {
 		t.Fatalf("parseSSOutput() len = %d, want 1 (malformed lines skipped)", len(conns))
 	}
+
 	if conns[0].Program != "claude" {
 		t.Fatalf("parseSSOutput()[0].Program = %q, want claude", conns[0].Program)
 	}
@@ -112,6 +117,7 @@ func TestParseSSOutputSkipsMalformedLines(t *testing.T) {
 
 func TestSSAvailable(t *testing.T) {
 	installFakeSS(t, "#!/bin/sh\nexit 0\n")
+
 	if !SSAvailable() {
 		t.Fatal("SSAvailable() = false, want true with fake ss on PATH")
 	}
@@ -119,6 +125,7 @@ func TestSSAvailable(t *testing.T) {
 
 func TestSSAvailableFalseWhenNotOnPath(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
+
 	if SSAvailable() {
 		t.Fatal("SSAvailable() = true, want false with empty PATH")
 	}
@@ -131,6 +138,7 @@ func TestGetEstablishedConnectionsViaSS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEstablishedConnectionsViaSS() error = %v", err)
 	}
+
 	if len(conns) != 4 {
 		t.Fatalf("GetEstablishedConnectionsViaSS() len = %d, want 4", len(conns))
 	}

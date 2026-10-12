@@ -60,6 +60,7 @@ func TestKillProcessRefusesProtectedPrograms(t *testing.T) {
 			t.Errorf("KillProcess(2, %q) = nil, want error for protected program", prog)
 			continue
 		}
+
 		if !strings.Contains(err.Error(), "protected") {
 			t.Errorf("KillProcess(2, %q) error = %q, want it to mention 'protected'", prog, err)
 		}
@@ -76,6 +77,7 @@ func TestKillProcessCaseInsensitiveProtectedMatch(t *testing.T) {
 			t.Errorf("KillProcess(2, %q) = nil, want error for case-insensitive protected match", prog)
 			continue
 		}
+
 		if !strings.Contains(err.Error(), "protected") {
 			t.Errorf("KillProcess(2, %q) error = %q, want it to mention 'protected'", prog, err)
 		}
@@ -130,6 +132,7 @@ func TestKillConnectionRefusesProtectedPrograms(t *testing.T) {
 			t.Errorf("KillConnection(2, %q) = nil, want error for protected program", prog)
 			continue
 		}
+
 		if !strings.Contains(err.Error(), "protected") {
 			t.Errorf("KillConnection(2, %q) error = %q, want it to mention 'protected'", prog, err)
 		}
@@ -154,6 +157,7 @@ func TestParsePIDValid(t *testing.T) {
 		if err != nil {
 			t.Errorf("ParsePID(%q) error = %v", tt.input, err)
 		}
+
 		if got != tt.want {
 			t.Errorf("ParsePID(%q) = %d, want %d", tt.input, got, tt.want)
 		}
@@ -178,15 +182,19 @@ func TestIsProtected(t *testing.T) {
 	if !isProtected("sshd") {
 		t.Error("isProtected(\"sshd\") = false, want true")
 	}
+
 	if !isProtected("SSHD") {
 		t.Error("isProtected(\"SSHD\") = false, want true (case-insensitive)")
 	}
+
 	if !isProtected("SystemD") {
 		t.Error("isProtected(\"SystemD\") = false, want true (case-insensitive)")
 	}
+
 	if isProtected("curl") {
 		t.Error("isProtected(\"curl\") = true, want false")
 	}
+
 	if isProtected("") {
 		t.Error("isProtected(\"\") = true, want false")
 	}
@@ -214,6 +222,7 @@ func TestGuardrailRefusalsWrapErrRefused(t *testing.T) {
 			t.Errorf("checkGuardrails(%d, %q) = %v, want an ErrRefused", tc.pid, tc.program, err)
 		}
 	}
+
 	if err := checkGuardrails(4242, "curl"); err != nil {
 		t.Errorf("checkGuardrails(4242, curl) = %v, want nil", err)
 	}

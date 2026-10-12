@@ -40,6 +40,7 @@ func SetProtectedPrograms(programs map[string]bool) {
 	for k, v := range programs {
 		normalized[strings.ToLower(k)] = v
 	}
+
 	protectedPrograms = normalized
 }
 
@@ -114,6 +115,7 @@ func KillConnection(pid int, program, localPort, remoteIP, remotePort string) er
 		slog.Info("killed single connection", "pid", pid, "program", program, "local_port", localPort, "remote", remoteAddr)
 		return nil
 	}
+
 	slog.Debug("connection-level kill unavailable, falling back to killing the process", "err", socketErr, "pid", pid, "program", program)
 
 	slog.Warn("killing connection", "pid", pid, "program", program, "address", remoteAddr)

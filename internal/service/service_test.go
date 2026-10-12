@@ -61,6 +61,7 @@ func TestRenderHexwallUnit(t *testing.T) {
 			t.Errorf("unit is missing %q:\n%s", want, unit)
 		}
 	}
+
 	if strings.Contains(renderHexwallUnit("/x", nil, false), "zeek") {
 		t.Error("unit without Zeek still references zeek.service")
 	}
@@ -88,6 +89,7 @@ func TestInstall_WritesUnitsAndStartsHexwall(t *testing.T) {
 			t.Errorf("%s not written: %v", unit, err)
 		}
 	}
+
 	want := []string{"daemon-reload", "enable --now zeek.service", "enable hexwall.service", "restart hexwall.service"}
 	if !slices.Equal(systemctl.calls, want) {
 		t.Fatalf("systemctl calls = %q, want %q", systemctl.calls, want)
@@ -97,6 +99,7 @@ func TestInstall_WritesUnitsAndStartsHexwall(t *testing.T) {
 // A zeek.service someone else wrote (a distro package, or by hand) must survive untouched.
 func TestInstall_KeepsForeignZeekUnit(t *testing.T) {
 	dir := t.TempDir()
+
 	foreign := "[Service]\nExecStart=/usr/bin/zeek -i eth1\n"
 	if err := os.WriteFile(filepath.Join(dir, zeekUnit), []byte(foreign), 0o644); err != nil {
 		t.Fatal(err)
@@ -111,6 +114,7 @@ func TestInstall_KeepsForeignZeekUnit(t *testing.T) {
 	if string(got) != foreign {
 		t.Fatalf("foreign zeek.service was overwritten:\n%s", got)
 	}
+
 	hexwall, _ := os.ReadFile(filepath.Join(dir, hexwallUnit))
 	if !strings.Contains(string(hexwall), "After=network-online.target docker.service zeek.service") {
 		t.Fatalf("hexwall.service doesn't order itself after the existing zeek.service:\n%s", hexwall)
@@ -119,13 +123,16 @@ func TestInstall_KeepsForeignZeekUnit(t *testing.T) {
 
 func TestInstall_WithoutZeek(t *testing.T) {
 	dir := t.TempDir()
+
 	systemctl := &fakeSystemctl{}
 	if err := install(&bytes.Buffer{}, Options{Binary: "/x"}, dir, nil, systemctl.run); err != nil {
 		t.Fatalf("install() error = %v", err)
 	}
+
 	if _, err := os.Stat(filepath.Join(dir, zeekUnit)); !os.IsNotExist(err) {
 		t.Fatalf("zeek.service written although hexwall doesn't use Zeek (err %v)", err)
 	}
+
 	if slices.Contains(systemctl.calls, "enable --now zeek.service") {
 		t.Fatalf("zeek.service enabled although hexwall doesn't use Zeek: %q", systemctl.calls)
 	}
@@ -136,6 +143,7 @@ func TestUninstall_RemovesOnlyHexwallsUnits(t *testing.T) {
 	if err := install(&bytes.Buffer{}, Options{Binary: "/x"}, dir, nil, (&fakeSystemctl{}).run); err != nil {
 		t.Fatal(err)
 	}
+
 	foreign := "[Service]\nExecStart=/usr/bin/zeek -i eth1\n"
 	if err := os.WriteFile(filepath.Join(dir, zeekUnit), []byte(foreign), 0o644); err != nil {
 		t.Fatal(err)
@@ -149,9 +157,11 @@ func TestUninstall_RemovesOnlyHexwallsUnits(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, hexwallUnit)); !os.IsNotExist(err) {
 		t.Fatalf("hexwall.service still there (err %v)", err)
 	}
+
 	if got, _ := os.ReadFile(filepath.Join(dir, zeekUnit)); string(got) != foreign {
 		t.Fatalf("foreign zeek.service changed:\n%s", got)
 	}
+
 	want := []string{"disable --now hexwall.service", "daemon-reload"}
 	if !slices.Equal(systemctl.calls, want) {
 		t.Fatalf("systemctl calls = %q, want %q", systemctl.calls, want)
@@ -163,6 +173,7 @@ func TestUninstall_NothingInstalled(t *testing.T) {
 	if err := uninstall(&bytes.Buffer{}, t.TempDir(), systemctl.run); err != nil {
 		t.Fatalf("uninstall() error = %v", err)
 	}
+
 	if len(systemctl.calls) != 0 {
 		t.Fatalf("systemctl called with nothing installed: %q", systemctl.calls)
 	}

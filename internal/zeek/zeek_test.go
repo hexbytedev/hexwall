@@ -13,6 +13,7 @@ import (
 // at controlled points instead of racing a real ticker.
 func newTestClient(t *testing.T, path string) *Client {
 	t.Helper()
+
 	return &Client{
 		logPath: path,
 		cache:   make(map[string]sniEntry),
@@ -21,6 +22,7 @@ func newTestClient(t *testing.T, path string) *Client {
 
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
+
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
@@ -37,6 +39,7 @@ func TestClientProcessNewLines_BasicParse(t *testing.T) {
 	if !ok {
 		t.Fatal("Lookup() ok = false, want true")
 	}
+
 	if domain != "example.com" {
 		t.Fatalf("Lookup() domain = %q, want %q", domain, "example.com")
 	}
@@ -47,6 +50,7 @@ func TestClientProcessNewLines_BasicParse(t *testing.T) {
 	if !ok {
 		t.Fatal("Lookup() reverse orientation ok = false, want true")
 	}
+
 	if domain != "example.com" {
 		t.Fatalf("Lookup() reverse orientation domain = %q, want %q", domain, "example.com")
 	}
@@ -81,6 +85,7 @@ func TestClientProcessNewLines_PartialLineHeldAcrossTicks(t *testing.T) {
 	if _, ok := c.Lookup("51820", "203.0.113.20", "443"); ok {
 		t.Fatal("Lookup() found a record from a partial line, want none yet")
 	}
+
 	if len(c.pending) == 0 {
 		t.Fatal("pending is empty, want the partial line to be held over")
 	}
@@ -93,6 +98,7 @@ func TestClientProcessNewLines_PartialLineHeldAcrossTicks(t *testing.T) {
 	if !ok {
 		t.Fatal("Lookup() ok = false after completing the line, want true")
 	}
+
 	if domain != "example.com" {
 		t.Fatalf("Lookup() domain = %q, want %q", domain, "example.com")
 	}
@@ -154,17 +160,21 @@ func TestParseTSVFieldsLine(t *testing.T) {
 	t.Parallel()
 
 	lines := strings.Split(strings.TrimRight(realZeekTSVHeader, "\n"), "\n")
+
 	var fieldsLine string
+
 	for _, l := range lines {
 		if strings.HasPrefix(l, "#fields\t") {
 			fieldsLine = l
 		}
 	}
+
 	if fieldsLine == "" {
 		t.Fatal("test fixture has no #fields line")
 	}
 
 	fields := parseTSVFieldsLine(fieldsLine)
+
 	want := map[string]int{
 		"ts": 0, "uid": 1, "id.orig_h": 2, "id.orig_p": 3, "id.resp_h": 4, "id.resp_p": 5,
 		"server_name": 9,
@@ -190,6 +200,7 @@ func TestReadTSVHeader(t *testing.T) {
 	if fields == nil {
 		t.Fatal("readTSVHeader() = nil, want a field map for a real TSV file")
 	}
+
 	if fields["server_name"] != 9 {
 		t.Fatalf("readTSVHeader()[server_name] = %d, want 9", fields["server_name"])
 	}
@@ -213,6 +224,7 @@ func TestReadTSVHeaderNilForJSON(t *testing.T) {
 // column order at all.
 func newTestClientTSV(t *testing.T, path string) *Client {
 	t.Helper()
+
 	return &Client{
 		logPath:   path,
 		cache:     make(map[string]sniEntry),
@@ -231,6 +243,7 @@ func TestClientProcessNewLines_TSVRealFixture(t *testing.T) {
 	if !ok {
 		t.Fatal("Lookup() ok = false, want true for the real captured TSV line")
 	}
+
 	if domain != "example.com" {
 		t.Fatalf("Lookup() domain = %q, want %q", domain, "example.com")
 	}
@@ -291,6 +304,7 @@ func TestClientProcessNewLines_TSVRotationRelearnsHeader(t *testing.T) {
 
 	c := newTestClientTSV(t, path)
 	c.processNewLines()
+
 	if _, ok := c.Lookup("37526", "172.66.147.243", "443"); !ok {
 		t.Fatal("Lookup() ok = false before rotation, want true")
 	}
@@ -299,6 +313,7 @@ func TestClientProcessNewLines_TSVRotationRelearnsHeader(t *testing.T) {
 	// header re-written from scratch (a real Zeek restart does exactly this).
 	newHeader := "#separator \\x09\n#fields\tts\tuid\tid.orig_h\tid.orig_p\tid.resp_h\tid.resp_p\tserver_name\n"
 	newLine := "1790163999.0\tCnew\t10.0.0.5\t51820\t203.0.113.30\t443\tpost-rotation.example\n"
+
 	writeFile(t, path, "") // straddling tick, matches the JSON rotation test above
 	c.processNewLines()
 	writeFile(t, path, newHeader+newLine)

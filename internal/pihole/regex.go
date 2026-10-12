@@ -51,6 +51,7 @@ func parseRegexRule(raw string, allow bool) (regexRule, error) {
 	pattern, options, _ := strings.Cut(raw, ";")
 
 	var rule regexRule
+
 	if options != "" {
 		for _, option := range strings.Split(options, ";") {
 			switch {
@@ -74,6 +75,7 @@ func parseRegexRule(raw string, allow bool) (regexRule, error) {
 	if err != nil {
 		return regexRule{}, fmt.Errorf("pattern does not compile in Go: %w", err)
 	}
+
 	rule.re = re
 
 	return rule, nil
@@ -90,10 +92,13 @@ func compileRegexRules(raws []string, allow bool) []regexRule {
 			} else {
 				slog.Warn("pi-hole regex deny rule skipped", "rule", raw, "err", err)
 			}
+
 			continue
 		}
+
 		rules = append(rules, rule)
 	}
+
 	return rules
 }
 
@@ -109,6 +114,7 @@ func (c *Checker) RefreshRegexLists() error {
 	if err != nil {
 		return err
 	}
+
 	denyRaw, err := c.regexPatterns(regexDenyView)
 	if err != nil {
 		return err
@@ -148,13 +154,16 @@ func (c *Checker) regexPatterns(view string) ([]string, error) {
 	}()
 
 	var patterns []string
+
 	for rows.Next() {
 		var pattern string
 		if err := rows.Scan(&pattern); err != nil {
 			return nil, fmt.Errorf("%s scan failed: %w", view, err)
 		}
+
 		patterns = append(patterns, pattern)
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("%s iteration failed: %w", view, err)
 	}
@@ -173,10 +182,12 @@ func (c *Checker) matchesRegex(domain string, allow bool) bool {
 	if allow {
 		rules = lists.allow
 	}
+
 	for _, rule := range rules {
 		if rule.matches(domain) {
 			return true
 		}
 	}
+
 	return false
 }

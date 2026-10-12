@@ -128,6 +128,7 @@ func (c *Client) Lookup(localPort, remoteIP, remotePort string) (string, bool) {
 	if c == nil {
 		return "", false
 	}
+
 	key := localPort + "|" + remoteIP + "|" + remotePort
 
 	c.mu.RLock()
@@ -154,6 +155,7 @@ func parseTSVFieldsLine(line string) map[string]int {
 	}
 
 	cols := strings.Split(line, "\t")
+
 	fields := make(map[string]int, len(cols)-1)
 	for i, name := range cols[1:] {
 		fields[name] = i
@@ -179,6 +181,7 @@ func readTSVHeader(logPath string) map[string]int {
 		if fields := parseTSVFieldsLine(line); fields != nil {
 			return fields
 		}
+
 		if !strings.HasPrefix(line, "#") {
 			return nil // reached a data line without finding #fields
 		}
@@ -207,6 +210,7 @@ func (c *Client) recordFromLine(line string) (origH, origP, respH, respP, server
 		if fields := parseTSVFieldsLine(line); fields != nil {
 			c.tsvFields = fields
 		}
+
 		return "", "", "", "", "", false
 
 	case strings.HasPrefix(line, "{"):
@@ -214,6 +218,7 @@ func (c *Client) recordFromLine(line string) (origH, origP, respH, respP, server
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			return "", "", "", "", "", false
 		}
+
 		return rec.OrigH, fmt.Sprint(rec.OrigP), rec.RespH, fmt.Sprint(rec.RespP), rec.ServerName, true
 
 	default:
@@ -227,9 +232,11 @@ func (c *Client) recordFromLine(line string) (origH, origP, respH, respP, server
 			if !ok || i >= len(cols) {
 				return ""
 			}
+
 			if cols[i] == "-" { // Zeek's unset-field marker
 				return ""
 			}
+
 			return cols[i]
 		}
 
@@ -305,6 +312,7 @@ func (c *Client) processNewLines() {
 	c.offset = fi.Size()
 
 	buf := append(c.pending, data...)
+
 	lastNewline := bytes.LastIndexByte(buf, '\n')
 	if lastNewline == -1 {
 		c.pending = buf

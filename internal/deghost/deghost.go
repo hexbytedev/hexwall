@@ -44,6 +44,7 @@ type SecurityReport struct {
 // NewClient creates a Client for the given API base URL.
 func NewClient(baseURL string, timeout time.Duration) *Client {
 	trimmed := strings.TrimRight(baseURL, "/")
+
 	return &Client{
 		baseURL: trimmed,
 		httpClient: &http.Client{
@@ -58,6 +59,7 @@ func (c *Client) CheckIP(ctx context.Context, ip string) (*IPReport, error) {
 	if c == nil {
 		return nil, errors.New("nil deghost client")
 	}
+
 	if c.httpClient == nil {
 		return nil, errors.New("nil deghost http client")
 	}
@@ -140,6 +142,7 @@ func (c *Client) CheckDomain(ctx context.Context, domain string) (*DomainReport,
 	if c == nil {
 		return nil, errors.New("nil deghost client")
 	}
+
 	if c.httpClient == nil {
 		return nil, errors.New("nil deghost http client")
 	}

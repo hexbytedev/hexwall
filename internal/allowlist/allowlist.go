@@ -37,6 +37,7 @@ func loadCIDRs(values []string) {
 			slog.Error("failed to parse allowlist CIDRs", "err", err)
 			continue
 		}
+
 		nets = append(nets, net)
 	}
 }
@@ -49,6 +50,7 @@ func parseCIDR(value string) (*net.IPNet, error) {
 		if ip == nil {
 			return nil, fmt.Errorf("invalid IP or CIDR: %q", value)
 		}
+
 		if ip.To4() != nil {
 			cidr += "/32"
 		} else {

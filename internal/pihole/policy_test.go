@@ -42,6 +42,7 @@ func openTestGravityDB(t *testing.T) (*sql.DB, string) {
 	`
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
+
 		t.Fatalf("create schema: %v", err)
 	}
 
@@ -52,6 +53,7 @@ func openTestGravityDB(t *testing.T) (*sql.DB, string) {
 // type 0 = allowlist, type 1 = denylist, type 2 = regex allowlist, type 3 = regex denylist.
 func insertDomain(t *testing.T, db *sql.DB, domain string, listType int) {
 	t.Helper()
+
 	_, err := db.Exec(`INSERT INTO domainlist (type, domain, enabled) VALUES (?, ?, 1)`, listType, domain)
 	if err != nil {
 		t.Fatalf("insert domain %q type %d: %v", domain, listType, err)
@@ -61,6 +63,7 @@ func insertDomain(t *testing.T, db *sql.DB, domain string, listType int) {
 // insertGravity inserts a domain into the gravity table.
 func insertGravity(t *testing.T, db *sql.DB, domain string) {
 	t.Helper()
+
 	_, err := db.Exec(`INSERT INTO gravity (domain, adlist_id) VALUES (?, 1)`, domain)
 	if err != nil {
 		t.Fatalf("insert gravity domain %q: %v", domain, err)
@@ -70,12 +73,15 @@ func insertGravity(t *testing.T, db *sql.DB, domain string) {
 func newTestChecker(t *testing.T, gravityPath string) *Checker {
 	t.Helper()
 	ftlPath := filepath.Join(t.TempDir(), "pihole-FTL.db")
+
 	db, err := sql.Open("sqlite", "file:"+(&url.URL{Path: ftlPath, RawQuery: "mode=rwc"}).String())
 	if err != nil {
 		t.Fatalf("open test FTL db: %v", err)
 	}
+
 	if _, err := db.Exec(`CREATE TABLE queries (id INTEGER PRIMARY KEY, timestamp INTEGER, type INTEGER, domain TEXT, status INTEGER, ip TEXT)`); err != nil {
 		_ = db.Close()
+
 		t.Fatalf("create FTL schema: %v", err)
 	}
 
@@ -84,6 +90,7 @@ func newTestChecker(t *testing.T, gravityPath string) *Checker {
 		gravityDB, err = sql.Open("sqlite", "file:"+(&url.URL{Path: gravityPath, RawQuery: "mode=ro"}).String())
 		if err != nil {
 			_ = db.Close()
+
 			t.Fatalf("open gravity db: %v", err)
 		}
 	}
@@ -108,6 +115,7 @@ func TestIsBlockedByPolicy_Denylist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsBlockedByPolicy() error = %v", err)
 	}
+
 	if !blocked {
 		t.Fatal("IsBlockedByPolicy() = false, want true for denylist domain")
 	}
@@ -130,6 +138,7 @@ func TestIsBlockedByPolicy_Gravity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsBlockedByPolicy() error = %v", err)
 	}
+
 	if !blocked {
 		t.Fatal("IsBlockedByPolicy() = false, want true for gravity domain")
 	}
@@ -152,6 +161,7 @@ func TestIsBlockedByPolicy_NoMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsBlockedByPolicy() error = %v", err)
 	}
+
 	if blocked {
 		t.Fatal("IsBlockedByPolicy() = true, want false for unknown domain")
 	}
@@ -174,6 +184,7 @@ func TestIsAllowedByPolicy_Allowlist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsAllowedByPolicy() error = %v", err)
 	}
+
 	if !allowed {
 		t.Fatal("IsAllowedByPolicy() = false, want true for allowlist domain")
 	}
@@ -196,6 +207,7 @@ func TestIsAllowedByPolicy_NoMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsAllowedByPolicy() error = %v", err)
 	}
+
 	if allowed {
 		t.Fatal("IsAllowedByPolicy() = true, want false for unknown domain")
 	}
@@ -221,6 +233,7 @@ func TestPolicyLookup_CaseNormalization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsBlockedByPolicy() error = %v", err)
 	}
+
 	if !blocked {
 		t.Fatal("IsBlockedByPolicy() = false, want true for case-insensitive denylist match")
 	}
@@ -230,6 +243,7 @@ func TestPolicyLookup_CaseNormalization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsBlockedByPolicy() error = %v", err)
 	}
+
 	if !blocked {
 		t.Fatal("IsBlockedByPolicy() = false, want true for case-insensitive gravity match")
 	}
@@ -239,6 +253,7 @@ func TestPolicyLookup_CaseNormalization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsAllowedByPolicy() error = %v", err)
 	}
+
 	if !allowed {
 		t.Fatal("IsAllowedByPolicy() = false, want true for case-insensitive allowlist match")
 	}
@@ -261,6 +276,7 @@ func TestPolicyLookup_EmptyDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsBlockedByPolicy(\"\") error = %v", err)
 	}
+
 	if blocked {
 		t.Fatal("IsBlockedByPolicy(\"\") = true, want false")
 	}
@@ -269,6 +285,7 @@ func TestPolicyLookup_EmptyDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsAllowedByPolicy(\"\") error = %v", err)
 	}
+
 	if allowed {
 		t.Fatal("IsAllowedByPolicy(\"\") = true, want false")
 	}
@@ -287,6 +304,7 @@ func TestPolicyLookup_NilGravityDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsBlockedByPolicy() error = %v, want nil", err)
 	}
+
 	if blocked {
 		t.Fatal("IsBlockedByPolicy() = true, want false for nil gravity DB")
 	}
@@ -295,6 +313,7 @@ func TestPolicyLookup_NilGravityDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsAllowedByPolicy() error = %v, want nil", err)
 	}
+
 	if allowed {
 		t.Fatal("IsAllowedByPolicy() = true, want false for nil gravity DB")
 	}
@@ -325,6 +344,7 @@ func TestPolicyCounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PolicyCounts() error = %v", err)
 	}
+
 	if counts == nil {
 		t.Fatal("PolicyCounts() = nil, want non-nil map")
 	}
@@ -345,12 +365,14 @@ func TestPolicyCounts(t *testing.T) {
 
 func TestPolicyCounts_NilGravityDB(t *testing.T) {
 	t.Parallel()
+
 	checker := &Checker{gravityDB: nil}
 
 	counts, err := checker.PolicyCounts()
 	if err != nil {
 		t.Fatalf("PolicyCounts() error = %v, want nil", err)
 	}
+
 	if counts != nil {
 		t.Fatalf("PolicyCounts() = %v, want nil for nil gravity DB", counts)
 	}
@@ -362,18 +384,23 @@ func TestGravityDBPath_Derived(t *testing.T) {
 	// Create the FTL db in a known directory.
 	dir := t.TempDir()
 	ftlPath := filepath.Join(dir, "pihole-FTL.db")
+
 	db, err := sql.Open("sqlite", "file:"+(&url.URL{Path: ftlPath, RawQuery: "mode=rwc"}).String())
 	if err != nil {
 		t.Fatalf("open FTL db: %v", err)
 	}
+
 	if _, err := db.Exec(`CREATE TABLE queries (id INTEGER PRIMARY KEY)`); err != nil {
 		_ = db.Close()
+
 		t.Fatalf("init FTL db: %v", err)
 	}
+
 	_ = db.Close()
 
 	// Create gravity.db next to it.
 	gravPath := filepath.Join(dir, "gravity.db")
+
 	gravDB, err := sql.Open("sqlite", "file:"+(&url.URL{Path: gravPath, RawQuery: "mode=rwc"}).String())
 	if err != nil {
 		t.Fatalf("open gravity db: %v", err)
@@ -381,8 +408,10 @@ func TestGravityDBPath_Derived(t *testing.T) {
 	// Create minimal schema so gravity opens cleanly.
 	if _, err := gravDB.Exec(`CREATE TABLE adlist (id INTEGER PRIMARY KEY); CREATE VIEW vw_gravity AS SELECT 1 WHERE 0;`); err != nil {
 		_ = gravDB.Close()
+
 		t.Fatalf("create gravity schema: %v", err)
 	}
+
 	_ = gravDB.Close()
 
 	// NewChecker should auto-discover gravity.db next to pihole-FTL.db.
@@ -406,14 +435,18 @@ func TestGravityDBPath_Missing(t *testing.T) {
 
 	dir := t.TempDir()
 	ftlPath := filepath.Join(dir, "pihole-FTL.db")
+
 	db, err := sql.Open("sqlite", "file:"+(&url.URL{Path: ftlPath, RawQuery: "mode=rwc"}).String())
 	if err != nil {
 		t.Fatalf("open FTL db: %v", err)
 	}
+
 	if _, err := db.Exec(`CREATE TABLE queries (id INTEGER PRIMARY KEY)`); err != nil {
 		_ = db.Close()
+
 		t.Fatalf("init FTL db: %v", err)
 	}
+
 	_ = db.Close()
 
 	// No gravity.db in dir — NewChecker should succeed with nil gravityDB.
@@ -436,6 +469,7 @@ func TestGravityDBPath_Missing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsBlockedByPolicy() error = %v", err)
 	}
+
 	if blocked {
 		t.Fatal("IsBlockedByPolicy() = true, want false when gravity unavailable")
 	}
@@ -479,6 +513,7 @@ func TestIsBlockedByPolicy_DenylistBeatsGravity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsBlockedByPolicy() error = %v", err)
 	}
+
 	if !blocked {
 		t.Fatal("IsBlockedByPolicy() = false, want true when domain is in both denylist and gravity")
 	}
@@ -503,6 +538,7 @@ func TestIsAllowedByPolicy_TakesPrecedenceOverGravity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsAllowedByPolicy() error = %v", err)
 	}
+
 	if !allowed {
 		t.Fatal("IsAllowedByPolicy() = false, want true for allowlisted domain")
 	}
@@ -525,6 +561,7 @@ func TestIsBlockedByPolicy_WhitespaceNormalization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsBlockedByPolicy() error = %v", err)
 	}
+
 	if !blocked {
 		t.Fatal("IsBlockedByPolicy() = false, want true with whitespace around domain")
 	}

@@ -30,6 +30,7 @@ func killSocket(localPort, remoteIP, remotePort string) error {
 	if err != nil {
 		return fmt.Errorf("could not verify socket state after ss -K: %w", err)
 	}
+
 	if stillEstablished {
 		return fmt.Errorf("ss -K did not close the connection (missing CAP_NET_ADMIN, unsupported kernel, or ss unavailable)")
 	}
@@ -48,6 +49,7 @@ func socketStillEstablished(localPort, remoteIP, remotePort string) (bool, error
 	}
 
 	dataLines := 0
+
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if strings.TrimSpace(line) != "" {
 			dataLines++

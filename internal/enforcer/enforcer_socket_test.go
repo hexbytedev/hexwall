@@ -19,6 +19,7 @@ func installFakeSS(t *testing.T, script string) {
 	t.Helper()
 
 	dir := t.TempDir()
+
 	path := filepath.Join(dir, "ss")
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake ss: %v", err)
@@ -52,6 +53,7 @@ func TestKillSocketFailsWhenConnectionStillThere(t *testing.T) {
 	if err == nil {
 		t.Fatal("killSocket() error = nil, want error when the recheck still shows the connection")
 	}
+
 	if !strings.Contains(err.Error(), "did not close") {
 		t.Fatalf("killSocket() error = %q, want it to mention the connection was not closed", err)
 	}
@@ -72,6 +74,7 @@ func TestKillSocketFailsWhenSSUnavailable(t *testing.T) {
 
 func requireSS(t *testing.T) {
 	t.Helper()
+
 	if _, err := exec.LookPath("ss"); err != nil {
 		t.Skip("ss not available in this environment")
 	}
@@ -88,9 +91,11 @@ func openLoopbackConnection(t *testing.T) (client net.Conn, clientPort, serverPo
 	if err != nil {
 		t.Fatalf("Listen() error = %v", err)
 	}
+
 	t.Cleanup(func() { _ = ln.Close() })
 
 	accepted := make(chan net.Conn, 1)
+
 	go func() {
 		c, err := ln.Accept()
 		if err == nil {
@@ -102,9 +107,11 @@ func openLoopbackConnection(t *testing.T) (client net.Conn, clientPort, serverPo
 	if err != nil {
 		t.Fatalf("Dial() error = %v", err)
 	}
+
 	t.Cleanup(func() { _ = conn.Close() })
 
 	server := <-accepted
+
 	t.Cleanup(func() { _ = server.Close() })
 
 	local := conn.LocalAddr().(*net.TCPAddr)
@@ -122,6 +129,7 @@ func TestSocketStillEstablishedTrueForLiveConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("socketStillEstablished() error = %v", err)
 	}
+
 	if !still {
 		t.Fatal("socketStillEstablished() = false, want true for a live connection")
 	}
@@ -137,18 +145,23 @@ func TestSocketStillEstablishedFalseAfterClose(t *testing.T) {
 
 	// Closing the local side takes the socket out of ESTABLISHED essentially
 	// immediately, but allow a couple of short retries to avoid flakiness.
-	var still bool
-	var err error
+	var (
+		still bool
+		err   error
+	)
 	for i := 0; i < 10; i++ {
 		still, err = socketStillEstablished(clientPort, "127.0.0.1", serverPort)
 		if err != nil {
 			t.Fatalf("socketStillEstablished() error = %v", err)
 		}
+
 		if !still {
 			break
 		}
+
 		time.Sleep(20 * time.Millisecond)
 	}
+
 	if still {
 		t.Fatal("socketStillEstablished() = true, want false after the connection was closed")
 	}
@@ -161,6 +174,7 @@ func TestSocketStillEstablishedNoMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("socketStillEstablished() error = %v", err)
 	}
+
 	if still {
 		t.Fatal("socketStillEstablished() = true, want false for a tuple that was never connected")
 	}
@@ -178,16 +192,19 @@ const noSuchPID = 1 << 30
 func installRecordingSS(t *testing.T, stillThere bool) (callLog string) {
 	t.Helper()
 	callLog = filepath.Join(t.TempDir(), "ss-calls")
+
 	answer := `echo "Recv-Q Send-Q Local Address:Port  Peer Address:Port"`
 	if stillThere {
 		answer = `printf "Recv-Q Send-Q Local Address:Port  Peer Address:Port\n0 0 10.0.0.5:51820 203.0.113.10:443\n"`
 	}
+
 	installFakeSS(t, "#!/bin/sh\n"+
 		"echo \"$@\" >> '"+callLog+"'\n"+
 		"case \"$1\" in\n"+
 		"  -K) exit 0 ;;\n"+
 		"  -tn) "+answer+" ;;\n"+
 		"esac\n")
+
 	return callLog
 }
 
@@ -197,6 +214,7 @@ func TestKillConnectionClosesJustTheSocket(t *testing.T) {
 	if err := KillConnection(noSuchPID, "curl", "51820", "203.0.113.10", "443"); err != nil {
 		t.Fatalf("KillConnection() error = %v, want nil: ss -K closed the socket, so no process signal was needed", err)
 	}
+
 	calls, _ := os.ReadFile(callLog)
 	if !strings.Contains(string(calls), "-K dst 203.0.113.10 dport 443 sport 51820") {
 		t.Fatalf("ss calls = %q, want an ss -K for exactly this connection", calls)
@@ -213,6 +231,7 @@ func TestKillConnectionFallsBackToProcessKill(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "SIGTERM") {
 		t.Fatalf("KillConnection() error = %v, want the SIGTERM fallback's error", err)
 	}
+
 	if errors.Is(err, ErrRefused) {
 		t.Fatalf("KillConnection() error = %v is ErrRefused, want a plain failure", err)
 	}
@@ -225,6 +244,7 @@ func TestKillConnectionRefusedBeforeTouchingSS(t *testing.T) {
 	if err := KillConnection(1, "curl", "51820", "203.0.113.10", "443"); !errors.Is(err, ErrRefused) {
 		t.Fatalf("KillConnection(PID 1) error = %v, want ErrRefused", err)
 	}
+
 	if _, err := os.Stat(callLog); !os.IsNotExist(err) {
 		t.Fatal("ss was called for a refused kill; guardrails must run first")
 	}

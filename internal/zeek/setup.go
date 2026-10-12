@@ -32,10 +32,12 @@ func Setup(out io.Writer) error {
 	if err != nil {
 		return err
 	}
+
 	siteDir, err := zeekConfigValue(zeekConfig, "--site_dir")
 	if err != nil {
 		return err
 	}
+
 	prefix, err := zeekConfigValue(zeekConfig, "--prefix")
 	if err != nil {
 		return err
@@ -45,6 +47,7 @@ func Setup(out io.Writer) error {
 	if err != nil {
 		return err
 	}
+
 	if changed {
 		_, _ = fmt.Fprintf(out, "✓ installed %s\n", filepath.Join(siteDir, scriptName))
 	} else {
@@ -52,10 +55,12 @@ func Setup(out io.Writer) error {
 	}
 
 	localZeek := filepath.Join(siteDir, "local.zeek")
+
 	added, err := ensureLoaded(localZeek)
 	if err != nil {
 		return err
 	}
+
 	if added {
 		_, _ = fmt.Fprintf(out, "✓ added %q to %s\n", loadLine, localZeek)
 	} else {
@@ -63,10 +68,12 @@ func Setup(out io.Writer) error {
 	}
 
 	nodeCfg := filepath.Join(prefix, "etc", "node.cfg")
+
 	missing, err := missingInterfaces(nodeCfg, interfaceExists)
 	if err != nil {
 		_, _ = fmt.Fprintf(out, "! could not check %s: %v\n", nodeCfg, err)
 	}
+
 	for _, name := range missing {
 		_, _ = fmt.Fprintf(out, "✗ %s tells Zeek to watch %q, which does not exist on this machine (available: %s)\n",
 			nodeCfg, name, strings.Join(interfaceNames(), ", "))
@@ -86,6 +93,7 @@ Next steps:
 	if len(missing) > 0 {
 		return fmt.Errorf("fix the interface in %s before deploying: Zeek cannot start on an interface that does not exist", nodeCfg)
 	}
+
 	return nil
 }
 
@@ -98,30 +106,36 @@ func Teardown(out io.Writer) error {
 		_, _ = fmt.Fprintln(out, "✓ Zeek not found; nothing to remove there")
 		return nil
 	}
+
 	siteDir, err := zeekConfigValue(zeekConfig, "--site_dir")
 	if err != nil {
 		return err
 	}
 
 	localZeek := filepath.Join(siteDir, "local.zeek")
+
 	removed, err := removeLoad(localZeek)
 	if err != nil {
 		return err
 	}
+
 	if removed {
 		_, _ = fmt.Fprintf(out, "✓ removed %q from %s\n", loadLine, localZeek)
 	}
 
 	script := filepath.Join(siteDir, scriptName)
+
 	deleted, err := removeScript(script)
 	if err != nil {
 		return err
 	}
+
 	if deleted {
 		_, _ = fmt.Fprintf(out, "✓ deleted %s\n", script)
 	} else if _, statErr := os.Stat(script); statErr == nil {
 		_, _ = fmt.Fprintf(out, "! %s wasn't written by hexwall; left in place\n", script)
 	}
+
 	return nil
 }
 
@@ -132,11 +146,13 @@ func removeLoad(localZeek string) (removed bool, err error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
+
 	if err != nil {
 		return false, permissionHint(fmt.Errorf("read %s: %w", localZeek, err))
 	}
 
 	lines := strings.Split(string(data), "\n")
+
 	kept := make([]string, 0, len(lines))
 	for i, line := range lines {
 		switch trimmed := strings.TrimSpace(line); {
@@ -148,12 +164,15 @@ func removeLoad(localZeek string) (removed bool, err error) {
 			kept = append(kept, line)
 		}
 	}
+
 	if !removed {
 		return false, nil
 	}
+
 	if err := os.WriteFile(localZeek, []byte(strings.Join(kept, "\n")), 0o644); err != nil {
 		return false, permissionHint(fmt.Errorf("write %s: %w", localZeek, err))
 	}
+
 	return true, nil
 }
 
@@ -163,15 +182,19 @@ func removeScript(path string) (deleted bool, err error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
+
 	if err != nil {
 		return false, permissionHint(fmt.Errorf("read %s: %w", path, err))
 	}
+
 	if !bytes.Contains(data, []byte(scriptSignature)) {
 		return false, nil
 	}
+
 	if err := os.Remove(path); err != nil {
 		return false, permissionHint(fmt.Errorf("delete %s: %w", path, err))
 	}
+
 	return true, nil
 }
 
@@ -181,10 +204,12 @@ func Zeekctl() (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	prefix, err := zeekConfigValue(zeekConfig, "--prefix")
 	if err != nil {
 		return "", err
 	}
+
 	return filepath.Join(prefix, "bin", "zeekctl"), nil
 }
 
@@ -192,9 +217,11 @@ func findZeekConfig() (string, error) {
 	if path, err := exec.LookPath("zeek-config"); err == nil {
 		return path, nil
 	}
+
 	if _, err := os.Stat(defaultZeekConfig); err == nil {
 		return defaultZeekConfig, nil
 	}
+
 	return "", errors.New("zeek-config not found on PATH or at " + defaultZeekConfig + "; is Zeek installed?")
 }
 
@@ -203,6 +230,7 @@ func zeekConfigValue(zeekConfig, flag string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s %s: %w", zeekConfig, flag, err)
 	}
+
 	return strings.TrimSpace(string(out)), nil
 }
 
@@ -212,9 +240,11 @@ func installScript(siteDir string, script []byte) (changed bool, err error) {
 	if current, err := os.ReadFile(path); err == nil && bytes.Equal(current, script) {
 		return false, nil
 	}
+
 	if err := os.WriteFile(path, script, 0o644); err != nil {
 		return false, permissionHint(fmt.Errorf("write %s: %w", path, err))
 	}
+
 	return true, nil
 }
 
@@ -224,6 +254,7 @@ func ensureLoaded(localZeek string) (added bool, err error) {
 	if err != nil {
 		return false, permissionHint(fmt.Errorf("read %s: %w", localZeek, err))
 	}
+
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.TrimSpace(line) == loadLine {
 			return false, nil
@@ -234,14 +265,17 @@ func ensureLoaded(localZeek string) (added bool, err error) {
 	if len(data) > 0 && !bytes.HasSuffix(data, []byte("\n")) {
 		addition = "\n" + addition
 	}
+
 	file, err := os.OpenFile(localZeek, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		return false, permissionHint(fmt.Errorf("open %s: %w", localZeek, err))
 	}
+
 	if _, err := file.WriteString(addition); err != nil {
 		_ = file.Close()
 		return false, fmt.Errorf("append to %s: %w", localZeek, err)
 	}
+
 	return true, file.Close()
 }
 
@@ -255,21 +289,26 @@ func missingInterfaces(nodeCfg string, exists func(string) bool) ([]string, erro
 	defer func() { _ = file.Close() }()
 
 	var missing []string
+
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
+
 		key, value, ok := strings.Cut(line, "=")
 		if !ok || strings.HasPrefix(line, "#") || strings.TrimSpace(key) != "interface" {
 			continue
 		}
+
 		name := strings.TrimSpace(value)
 		if i := strings.LastIndex(name, "::"); i >= 0 {
 			name = name[i+2:]
 		}
+
 		if name != "" && !exists(name) {
 			missing = append(missing, name)
 		}
 	}
+
 	return missing, scanner.Err()
 }
 
@@ -283,10 +322,12 @@ func interfaceNames() []string {
 	if err != nil {
 		return nil
 	}
+
 	names := make([]string, 0, len(interfaces))
 	for _, iface := range interfaces {
 		names = append(names, iface.Name)
 	}
+
 	return names
 }
 
@@ -300,6 +341,7 @@ func zeekLogDir(prefix string) string {
 			}
 		}
 	}
+
 	return filepath.Join(prefix, "logs")
 }
 
@@ -307,5 +349,6 @@ func permissionHint(err error) error {
 	if errors.Is(err, fs.ErrPermission) {
 		return fmt.Errorf("%w (run with sudo)", err)
 	}
+
 	return err
 }

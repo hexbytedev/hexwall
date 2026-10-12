@@ -13,10 +13,12 @@ import (
 
 func TestIPCacheRefreshWritesTrustedIPAndDomains(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "hexwall.db")
+
 	hexwallStore, err := store.NewStore(dbPath)
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
+
 	defer func() {
 		if err := hexwallStore.Close(); err != nil {
 			t.Fatalf("Close() error = %v", err)
@@ -49,6 +51,7 @@ func TestIPCacheRefreshWritesTrustedIPAndDomains(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IsAllowed() error = %v", err)
 	}
+
 	if !allowed {
 		t.Fatal("IsAllowed() = false, want true")
 	}
@@ -57,6 +60,7 @@ func TestIPCacheRefreshWritesTrustedIPAndDomains(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DomainsForIP() error = %v", err)
 	}
+
 	want := []string{"example.com", "example.org"}
 	if !reflect.DeepEqual(domains, want) {
 		t.Fatalf("DomainsForIP() = %v, want %v", domains, want)
@@ -77,11 +81,13 @@ func (l *fakeQueryLog) clientAsks(domain string) {
 
 func (l *fakeQueryLog) answeredQueriesAfter(afterID, since int64) ([]AnsweredQuery, error) {
 	var out []AnsweredQuery
+
 	for _, q := range l.queries {
 		if q.ID > afterID && q.Timestamp.Unix() >= since {
 			out = append(out, q)
 		}
 	}
+
 	return out, nil
 }
 
@@ -89,6 +95,7 @@ func (l *fakeQueryLog) maxQueryID() (int64, error) {
 	if len(l.queries) == 0 {
 		return 0, nil
 	}
+
 	return l.queries[len(l.queries)-1].ID, nil
 }
 
@@ -96,16 +103,20 @@ func (l *fakeQueryLog) maxQueryID() (int64, error) {
 func (l *fakeQueryLog) lookupThroughPihole(_ context.Context, host string) ([]string, error) {
 	l.lookups = append(l.lookups, host)
 	l.clientAsks(host)
+
 	return []string{"192.0.2.10"}, nil
 }
 
 func newFakeCache(t *testing.T, log *fakeQueryLog) *IPCache {
 	t.Helper()
+
 	hexwallStore, err := store.NewStore(filepath.Join(t.TempDir(), "hexwall.db"))
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
+
 	t.Cleanup(func() { _ = hexwallStore.Close() })
+
 	return &IPCache{
 		store:                hexwallStore,
 		answeredQueriesAfter: log.answeredQueriesAfter,
@@ -122,8 +133,10 @@ func TestIPCacheRefreshIgnoresOwnLookups(t *testing.T) {
 	cache := newFakeCache(t, log)
 
 	log.clientAsks("example.com")
+
 	for range 5 {
 		cache.Refresh(context.Background())
+
 		log.now = log.now.Add(30 * time.Second)
 	}
 
@@ -138,6 +151,7 @@ func TestIPCacheRefreshResolvesRepeatClientQueries(t *testing.T) {
 
 	log.clientAsks("example.com")
 	cache.Refresh(context.Background())
+
 	log.now = log.now.Add(time.Minute)
 	log.clientAsks("example.com")
 	cache.Refresh(context.Background())

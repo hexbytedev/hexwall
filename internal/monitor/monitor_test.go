@@ -35,6 +35,7 @@ func newTestStore(t *testing.T) (*store.Store, string) {
 	if err != nil {
 		t.Fatalf("store.NewStore() error = %v", err)
 	}
+
 	t.Cleanup(func() {
 		if err := s.Close(); err != nil {
 			t.Errorf("Store.Close() error = %v", err)
@@ -62,6 +63,7 @@ func queryInt(t *testing.T, dbPath, query string, args ...any) int {
 	if err := db.QueryRow(query, args...).Scan(&got); err != nil {
 		t.Fatalf("query %q: %v", query, err)
 	}
+
 	return got
 }
 
@@ -89,6 +91,7 @@ func openTestGravityDB(t *testing.T) (*sql.DB, string) {
 	`
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
+
 		t.Fatalf("create gravity schema: %v", err)
 	}
 
@@ -98,6 +101,7 @@ func openTestGravityDB(t *testing.T) (*sql.DB, string) {
 // insertDomain inserts a domain into domainlist. type 0 = allowlist, 1 = denylist.
 func insertDomain(t *testing.T, db *sql.DB, domain string, listType int) {
 	t.Helper()
+
 	if _, err := db.Exec(`INSERT INTO domainlist (type, domain, enabled) VALUES (?, ?, 1)`, listType, domain); err != nil {
 		t.Fatalf("insert domain %q type %d: %v", domain, listType, err)
 	}
@@ -109,13 +113,16 @@ func newTestChecker(t *testing.T, gravitySetup func(db *sql.DB)) *pihole.Checker
 	t.Helper()
 
 	ftlPath := filepath.Join(t.TempDir(), "pihole-FTL.db")
+
 	ftlDB, err := sql.Open("sqlite", "file:"+(&url.URL{Path: ftlPath, RawQuery: "mode=rwc"}).String())
 	if err != nil {
 		t.Fatalf("create ftl db: %v", err)
 	}
+
 	if _, err := ftlDB.Exec(`CREATE TABLE queries (id INTEGER PRIMARY KEY, timestamp INTEGER, type INTEGER, domain TEXT, status INTEGER, ip TEXT)`); err != nil {
 		t.Fatalf("create ftl schema: %v", err)
 	}
+
 	if err := ftlDB.Close(); err != nil {
 		t.Fatalf("close ftl db: %v", err)
 	}
@@ -124,6 +131,7 @@ func newTestChecker(t *testing.T, gravitySetup func(db *sql.DB)) *pihole.Checker
 	if gravitySetup != nil {
 		gravitySetup(gravDB)
 	}
+
 	if err := gravDB.Close(); err != nil {
 		t.Fatalf("close gravity db: %v", err)
 	}
@@ -132,6 +140,7 @@ func newTestChecker(t *testing.T, gravitySetup func(db *sql.DB)) *pihole.Checker
 	if err != nil {
 		t.Fatalf("pihole.NewChecker() error = %v", err)
 	}
+
 	t.Cleanup(func() {
 		if err := checker.Close(); err != nil {
 			t.Errorf("Checker.Close() error = %v", err)
@@ -147,6 +156,7 @@ func installFakeSomo(t *testing.T, script string) {
 	t.Helper()
 
 	dir := t.TempDir()
+
 	path := filepath.Join(dir, "somo")
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake somo: %v", err)
@@ -159,10 +169,12 @@ func installFakeSomo(t *testing.T, script string) {
 // Used to assert a code path never makes a live deghost call.
 func failIfCalled(t *testing.T) *httptest.Server {
 	t.Helper()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected HTTP call to deghost: %s", r.URL.Path)
 	}))
 	t.Cleanup(srv.Close)
+
 	return srv
 }
 
@@ -187,6 +199,7 @@ func TestNormalizeMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+
 			if got := normalizeMode(tt.mode); got != tt.want {
 				t.Fatalf("normalizeMode(%q) = %q, want %q", tt.mode, got, tt.want)
 			}
@@ -217,16 +230,20 @@ func TestRemoteIP(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+
 			ip, err := remoteIP(tt.address)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("remoteIP(%q) error = nil, want error", tt.address)
 				}
+
 				return
 			}
+
 			if err != nil {
 				t.Fatalf("remoteIP(%q) error = %v, want nil", tt.address, err)
 			}
+
 			if ip.String() != tt.wantIP {
 				t.Fatalf("remoteIP(%q) = %q, want %q", tt.address, ip.String(), tt.wantIP)
 			}
@@ -252,8 +269,10 @@ func TestApplyOutcome(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.outcome, func(t *testing.T) {
 			t.Parallel()
+
 			var summary scanSummary
 			applyOutcome(&summary, tt.outcome)
+
 			if got := tt.get(summary); got != 1 {
 				t.Fatalf("applyOutcome(%q) counter = %d, want 1", tt.outcome, got)
 			}
@@ -262,9 +281,12 @@ func TestApplyOutcome(t *testing.T) {
 
 	t.Run("unrecognized outcome increments nothing", func(t *testing.T) {
 		t.Parallel()
+
 		var want scanSummary
+
 		got := want
 		applyOutcome(&got, "garbage")
+
 		if got != want {
 			t.Fatalf("applyOutcome(garbage) summary = %+v, want unchanged %+v", got, want)
 		}
@@ -287,9 +309,11 @@ func TestHandleZeekEventBlockedDomainPersisted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecentZeekAlert() error = %v", err)
 	}
+
 	if alert == nil {
 		t.Fatal("RecentZeekAlert() = nil, want persisted alert")
 	}
+
 	if !alert.Blocked {
 		t.Fatal("alert.Blocked = false, want true for denylisted domain")
 	}
@@ -307,9 +331,11 @@ func TestHandleZeekEventUnblockedDomainPersisted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecentZeekAlert() error = %v", err)
 	}
+
 	if alert == nil {
 		t.Fatal("RecentZeekAlert() = nil, want persisted alert")
 	}
+
 	if alert.Blocked {
 		t.Fatal("alert.Blocked = true, want false for domain not on denylist")
 	}
@@ -346,10 +372,12 @@ func TestHandleZeekEventEnforceKillsLocalConnection(t *testing.T) {
 	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections WHERE ip = ?`, "203.0.113.20"); got != 1 {
 		t.Fatalf("killed_connections count = %d, want 1", got)
 	}
+
 	alert, err := hexwallStore.RecentZeekAlert(event.SrcIP, event.SNI)
 	if err != nil || alert == nil {
 		t.Fatalf("RecentZeekAlert() = %v, %v; want persisted alert", alert, err)
 	}
+
 	if alert.ActionTaken != "kill_attempted" {
 		t.Fatalf("alert.ActionTaken = %q, want %q", alert.ActionTaken, "kill_attempted")
 	}
@@ -363,6 +391,7 @@ func TestHandleZeekEventAllowlistedDomainNotKilled(t *testing.T) {
 		if _, err := db.Exec(`INSERT INTO gravity (domain) VALUES ('cdn.example.com')`); err != nil {
 			t.Fatal(err)
 		}
+
 		insertDomain(t, db, "cdn.example.com", 0) // allowlist
 	})
 	hexwallStore, dbPath := newTestStore(t)
@@ -378,10 +407,12 @@ func TestHandleZeekEventAllowlistedDomainNotKilled(t *testing.T) {
 	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections`); got != 0 {
 		t.Fatalf("killed_connections count = %d, want 0: the domain is allowlisted", got)
 	}
+
 	alert, err := hexwallStore.RecentZeekAlert(event.SrcIP, event.SNI)
 	if err != nil || alert == nil {
 		t.Fatalf("RecentZeekAlert() = %v, %v; want the alert recorded", alert, err)
 	}
+
 	if alert.Blocked {
 		t.Fatal("alert recorded as blocked; Pi-hole allows this domain")
 	}
@@ -425,10 +456,12 @@ func TestHandleZeekEventEnforceOtherDeviceNotKilled(t *testing.T) {
 	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections`); got != 0 {
 		t.Fatalf("killed_connections count = %d, want 0", got)
 	}
+
 	alert, err := hexwallStore.RecentZeekAlert(event.SrcIP, event.SNI)
 	if err != nil || alert == nil {
 		t.Fatalf("RecentZeekAlert() = %v, %v; want persisted alert", alert, err)
 	}
+
 	if alert.ActionTaken != "not_on_this_host" {
 		t.Fatalf("alert.ActionTaken = %q, want %q", alert.ActionTaken, "not_on_this_host")
 	}
@@ -476,6 +509,7 @@ func TestApplyBlockedOutcomeEnforceModeLogsKillBeforeAttemptingIt(t *testing.T) 
 	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections WHERE ip = ? AND outcome = 'refused'`, "203.0.113.10"); got != 1 {
 		t.Fatalf("refused rows = %d, want 1: a refused kill must be recorded as refused", got)
 	}
+
 	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections WHERE outcome = 'killed'`); got != 0 {
 		t.Fatalf("killed rows = %d, want 0: nothing was killed", got)
 	}
@@ -506,6 +540,7 @@ func TestEvaluateIPOnlyTrustedIPUpdatesEstablished(t *testing.T) {
 
 	conn := connlist.Connection{Program: "curl", RAddress: "203.0.113.20:443"}
 	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: true, Mode: ModeWatch}
+
 	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.20", conn)
 	if got != "trusted" {
 		t.Fatalf("evaluateIPOnly() = %q, want %q", got, "trusted")
@@ -523,6 +558,7 @@ func TestEvaluateIPOnlyDeghostDisabledReturnsUnknown(t *testing.T) {
 
 	conn := connlist.Connection{Program: "curl", RAddress: "203.0.113.21:443"}
 	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: false, Mode: ModeWatch}
+
 	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.21", conn)
 	if got != "unknown" {
 		t.Fatalf("evaluateIPOnly() = %q, want %q", got, "unknown")
@@ -540,6 +576,7 @@ func TestEvaluateIPOnlyCachedCleanReturnsUnknownNoHTTPCall(t *testing.T) {
 
 	conn := connlist.Connection{Program: "curl", RAddress: "203.0.113.22:443"}
 	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: true, Mode: ModeWatch}
+
 	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.22", conn)
 	if got != "unknown" {
 		t.Fatalf("evaluateIPOnly() = %q, want %q", got, "unknown")
@@ -558,6 +595,7 @@ func TestEvaluateIPOnlyCachedBlockedReturnsBlockedAndKills(t *testing.T) {
 	// PID 1 keeps the actual kill attempt safely refused by enforcer guardrails.
 	conn := connlist.Connection{PID: "1", Program: "curl", RAddress: "203.0.113.23:443"}
 	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: true, Mode: ModeEnforce}
+
 	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.23", conn)
 	if got != "blocked" {
 		t.Fatalf("evaluateIPOnly() = %q, want %q", got, "blocked")
@@ -573,11 +611,13 @@ func TestEvaluateIPOnlyLiveCheckPrivateReservedCachesClean(t *testing.T) {
 		w.WriteHeader(http.StatusForbidden)
 	}))
 	defer srv.Close()
+
 	client := deghost.NewClient(srv.URL, time.Second)
 
 	hexwallStore, _ := newTestStore(t)
 	conn := connlist.Connection{Program: "curl", RAddress: "203.0.113.24:443"}
 	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: true, Mode: ModeWatch}
+
 	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.24", conn)
 	if got != "unknown" {
 		t.Fatalf("evaluateIPOnly() = %q, want %q", got, "unknown")
@@ -587,9 +627,11 @@ func TestEvaluateIPOnlyLiveCheckPrivateReservedCachesClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRecentFraudCheck() error = %v", err)
 	}
+
 	if entry == nil {
 		t.Fatal("GetRecentFraudCheck() = nil, want a cached clean entry after private/reserved verdict")
 	}
+
 	if entry.ShouldKill {
 		t.Fatal("GetRecentFraudCheck().ShouldKill = true, want false for private/reserved verdict")
 	}
@@ -604,11 +646,13 @@ func TestEvaluateIPOnlyLiveCheckShouldKillCachesAndBlocks(t *testing.T) {
 		})
 	}))
 	defer srv.Close()
+
 	client := deghost.NewClient(srv.URL, time.Second)
 
 	hexwallStore, dbPath := newTestStore(t)
 	conn := connlist.Connection{PID: "1", Program: "curl", RAddress: "203.0.113.25:443"}
 	scanner := &Scanner{Store: hexwallStore, DeghostClient: client, DeghostIP: true, Mode: ModeEnforce}
+
 	got := scanner.evaluateIPOnly(context.Background(), "203.0.113.25", conn)
 	if got != "blocked" {
 		t.Fatalf("evaluateIPOnly() = %q, want %q", got, "blocked")
@@ -618,6 +662,7 @@ func TestEvaluateIPOnlyLiveCheckShouldKillCachesAndBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRecentFraudCheck() error = %v", err)
 	}
+
 	if entry == nil || !entry.ShouldKill {
 		t.Fatalf("GetRecentFraudCheck() = %+v, want cached ShouldKill = true", entry)
 	}
@@ -649,6 +694,7 @@ func TestRunScanFallsBackToSomoWhenConnectionListerUnset(t *testing.T) {
 	// Even when a caller forgets to populate the field, Run should still work.
 	scanner := &Scanner{Store: hexwallStore, Mode: ModeWatch}
 	scanner.Run(context.Background())
+
 	if scanner.ConnectionLister == nil {
 		t.Fatal("ConnectionLister fallback is nil after Run()")
 	}

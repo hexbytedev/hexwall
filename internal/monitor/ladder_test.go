@@ -31,6 +31,7 @@ const ladderIP = "203.0.113.50"
 // ladderScan runs one enforce-mode scan of a single connection to ladderIP whose SNI is sni.
 func ladderScan(t *testing.T, scanner *Scanner, sni string) {
 	t.Helper()
+
 	conn := connlist.Connection{LPort: "40000", RAddress: ladderIP + ":443", RPort: "443", PID: "1", Program: "curl"}
 	scanner.Mode = ModeEnforce
 	scanner.ConnectionLister = func() ([]connlist.Connection, error) { return []connlist.Connection{conn}, nil }
@@ -40,15 +41,19 @@ func ladderScan(t *testing.T, scanner *Scanner, sni string) {
 
 func sniOutcome(t *testing.T, dbPath, domain string) string {
 	t.Helper()
+
 	db, err := sql.Open("sqlite", "file:"+dbPath+"?mode=ro")
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	defer func() { _ = db.Close() }()
+
 	var outcome string
 	if err := db.QueryRow(`SELECT outcome FROM sni_observations WHERE ip = ? AND domain = ?`, ladderIP, domain).Scan(&outcome); err != nil {
 		t.Fatalf("no sni_observations row for %s: %v", domain, err)
 	}
+
 	return outcome
 }
 
@@ -63,6 +68,7 @@ func TestRunAllowlistedSNIIsTrusted(t *testing.T) {
 		if _, err := db.Exec(`INSERT INTO gravity (domain) VALUES ('ads.example.com')`); err != nil {
 			t.Fatal(err)
 		}
+
 		insertDomain(t, db, "ads.example.com", 0)
 	})
 	hexwallStore, dbPath := newTestStore(t)
@@ -72,6 +78,7 @@ func TestRunAllowlistedSNIIsTrusted(t *testing.T) {
 	if got := sniOutcome(t, dbPath, "ads.example.com"); got != string(store.OutcomePolicyAllowed) {
 		t.Fatalf("outcome = %q, want %q", got, store.OutcomePolicyAllowed)
 	}
+
 	if got := killRows(t, dbPath); got != 0 {
 		t.Fatalf("kill rows = %d, want 0", got)
 	}
@@ -101,6 +108,7 @@ func TestRunBlockedSNIIsKilled(t *testing.T) {
 			if got := sniOutcome(t, dbPath, tc.sni); got != string(store.OutcomePolicyBlocked) {
 				t.Fatalf("outcome = %q, want %q", got, store.OutcomePolicyBlocked)
 			}
+
 			if got := killRows(t, dbPath); got != 1 {
 				t.Fatalf("kill rows = %d, want 1", got)
 			}
@@ -111,6 +119,7 @@ func TestRunBlockedSNIIsKilled(t *testing.T) {
 // Rung 5: a domain Pi-hole resolved to this very IP is trusted.
 func TestRunSNIKnownForThisIPIsTrusted(t *testing.T) {
 	checker := newTestChecker(t, nil)
+
 	hexwallStore, dbPath := newTestStore(t)
 	if err := hexwallStore.UpsertAllowedIPDomain(ladderIP, "cdn.example.com"); err != nil {
 		t.Fatal(err)
@@ -121,6 +130,7 @@ func TestRunSNIKnownForThisIPIsTrusted(t *testing.T) {
 	if got := sniOutcome(t, dbPath, "www.cdn.example.com"); got != string(store.OutcomeIPDomainMatch) {
 		t.Fatalf("outcome = %q, want %q", got, store.OutcomeIPDomainMatch)
 	}
+
 	if got := killRows(t, dbPath); got != 0 {
 		t.Fatalf("kill rows = %d, want 0", got)
 	}
@@ -138,6 +148,7 @@ func TestRunUnknownSNIWithoutDeghostIsNotKilled(t *testing.T) {
 	if got := sniOutcome(t, dbPath, "new.example.com"); got != string(store.OutcomeUnknown) {
 		t.Fatalf("outcome = %q, want %q", got, store.OutcomeUnknown)
 	}
+
 	if got := killRows(t, dbPath); got != 0 {
 		t.Fatalf("kill rows = %d, want 0", got)
 	}
@@ -147,8 +158,10 @@ func TestRunUnknownSNIWithoutDeghostIsNotKilled(t *testing.T) {
 // doesn't ask the API again.
 func TestRunUnknownSNIDeghostBlockedIsKilledAndCached(t *testing.T) {
 	var calls atomic.Int32
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
+
 		_, _ = w.Write([]byte(`{"status":"allowed","blacklisted":true}`))
 	}))
 	t.Cleanup(srv.Close)
@@ -163,6 +176,7 @@ func TestRunUnknownSNIDeghostBlockedIsKilledAndCached(t *testing.T) {
 	if got := killRows(t, dbPath); got != 2 {
 		t.Fatalf("kill rows = %d, want 2 (one per scan)", got)
 	}
+
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("deghost called %d times, want 1: the second scan must use the cached verdict", got)
 	}
@@ -184,6 +198,7 @@ func TestRunWithoutSNIUsesIPOnlyPath(t *testing.T) {
 	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM sni_observations`); got != 0 {
 		t.Fatalf("sni_observations rows = %d, want 0", got)
 	}
+
 	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM ip_observations WHERE ip = ?`, ladderIP); got != 1 {
 		t.Fatalf("ip_observations rows = %d, want 1: the IP-only path must have run", got)
 	}

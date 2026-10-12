@@ -58,13 +58,16 @@ func NewChecker(config *Config) (*Checker, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("pihole-FTL.db not found at %s", config.DBPath)
 		}
+
 		return nil, fmt.Errorf("cannot access %s: %w", config.DBPath, err)
 	}
+
 	if err := file.Close(); err != nil {
 		return nil, fmt.Errorf("close access check for %s: %w", config.DBPath, err)
 	}
 
 	dsn := "file:" + (&url.URL{Path: config.DBPath, RawQuery: "mode=ro"}).String()
+
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open pihole-db: %w", err)
@@ -105,11 +108,13 @@ func openGravityDB(path string, out **sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("cannot access %s: %w", path, err)
 	}
+
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("close access check for %s: %w", path, err)
 	}
 
 	dsn := "file:" + (&url.URL{Path: path, RawQuery: "mode=ro"}).String()
+
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return fmt.Errorf("failed to open gravity-db: %w", err)
@@ -121,6 +126,7 @@ func openGravityDB(path string, out **sql.DB) error {
 	}
 
 	*out = db
+
 	return nil
 }
 
@@ -129,14 +135,20 @@ func (c *Checker) Close() error {
 	if c == nil {
 		return nil
 	}
-	var errFTL error
-	var errGravity error
+
+	var (
+		errFTL     error
+		errGravity error
+	)
+
 	if c.db != nil {
 		errFTL = c.db.Close()
 	}
+
 	if c.gravityDB != nil {
 		errGravity = c.gravityDB.Close()
 	}
+
 	return errors.Join(errFTL, errGravity)
 }
 
@@ -151,6 +163,7 @@ func (c *Checker) IsDomainKnown(domain string) (bool, error) {
 	cutoff := time.Now().Add(-domainLookback).Unix()
 
 	var found int
+
 	err := c.db.QueryRow(`
 		SELECT 1
 		FROM queries
@@ -162,6 +175,7 @@ func (c *Checker) IsDomainKnown(domain string) (bool, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
+
 	if err != nil {
 		return false, fmt.Errorf("database query failed: %w", err)
 	}
@@ -175,11 +189,13 @@ func (c *Checker) IsAllowedByPolicy(domain string) (bool, error) {
 	if domain == "" {
 		return false, nil
 	}
+
 	if c == nil || c.gravityDB == nil {
 		return false, nil
 	}
 
 	var found int
+
 	err := c.gravityDB.QueryRow(`
 		SELECT 1 FROM vw_allowlist
 		WHERE domain = ? COLLATE NOCASE
@@ -188,6 +204,7 @@ func (c *Checker) IsAllowedByPolicy(domain string) (bool, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return c.matchesRegex(domain, true), nil
 	}
+
 	if err != nil {
 		return false, fmt.Errorf("allowlist lookup failed: %w", err)
 	}
@@ -201,11 +218,13 @@ func (c *Checker) IsBlockedByPolicy(domain string) (bool, error) {
 	if domain == "" {
 		return false, nil
 	}
+
 	if c == nil || c.gravityDB == nil {
 		return false, nil
 	}
 
 	var found int
+
 	err := c.gravityDB.QueryRow(`
 		SELECT 1 FROM vw_denylist
 		WHERE domain = ? COLLATE NOCASE
@@ -214,6 +233,7 @@ func (c *Checker) IsBlockedByPolicy(domain string) (bool, error) {
 	if err == nil {
 		return true, nil
 	}
+
 	if !errors.Is(err, sql.ErrNoRows) {
 		return false, fmt.Errorf("denylist lookup failed: %w", err)
 	}
@@ -226,6 +246,7 @@ func (c *Checker) IsBlockedByPolicy(domain string) (bool, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return c.matchesRegex(domain, false), nil
 	}
+
 	if err != nil {
 		return false, fmt.Errorf("gravity lookup failed: %w", err)
 	}
@@ -245,10 +266,12 @@ func (c *Checker) PolicyCounts() (map[string]int64, error) {
 
 	for _, view := range views {
 		var count int64
+
 		err := c.gravityDB.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s`, view)).Scan(&count)
 		if err != nil {
 			return nil, fmt.Errorf("count %s: %w", view, err)
 		}
+
 		counts[view] = count
 	}
 
@@ -285,6 +308,7 @@ type AnsweredQuery struct {
 func (c *Checker) AnsweredQueriesAfter(afterID, since int64) ([]AnsweredQuery, error) {
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(answeredStatuses)), ",")
 	args := make([]any, 0, len(answeredStatuses)+2)
+
 	args = append(args, afterID, since)
 	for _, status := range answeredStatuses {
 		args = append(args, status)
@@ -308,18 +332,23 @@ func (c *Checker) AnsweredQueriesAfter(afterID, since int64) ([]AnsweredQuery, e
 	}()
 
 	var queries []AnsweredQuery
+
 	for rows.Next() {
 		var q AnsweredQuery
+
 		var timestamp float64 // FTL v6 stores fractional seconds
 		if err := rows.Scan(&q.ID, &q.Domain, &timestamp); err != nil {
 			return nil, fmt.Errorf("scan failed: %w", err)
 		}
+
 		q.Timestamp = time.Unix(0, int64(timestamp*float64(time.Second)))
 		queries = append(queries, q)
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows iteration failed: %w", err)
 	}
+
 	return queries, nil
 }
 
@@ -330,6 +359,7 @@ func (c *Checker) MaxQueryID() (int64, error) {
 	if err := c.db.QueryRow(`SELECT MAX(id) FROM queries`).Scan(&maxID); err != nil {
 		return 0, fmt.Errorf("database query failed: %w", err)
 	}
+
 	return maxID.Int64, nil
 }
 

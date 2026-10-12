@@ -19,51 +19,66 @@ import (
 
 func readFixtureLines(t *testing.T, name string) []string {
 	t.Helper()
+
 	data, err := os.ReadFile(filepath.Join("testdata", name))
 	if err != nil {
 		t.Fatalf("read fixture %s: %v", name, err)
 	}
+
 	return strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
 }
 
 func parseAll(t *testing.T, lines []string) []Event {
 	t.Helper()
-	var parser noticeParser
-	var events []Event
+
+	var (
+		parser noticeParser
+		events []Event
+	)
+
 	for _, line := range lines {
 		event, ok, err := parser.parseLine(line)
 		if err != nil {
 			t.Fatalf("parseLine(%q) error = %v", line, err)
 		}
+
 		if ok {
 			events = append(events, event)
 		}
 	}
+
 	return events
 }
 
 func assertGoogleBypassEvent(t *testing.T, events []Event) {
 	t.Helper()
+
 	if len(events) != 1 {
 		t.Fatalf("got %d events, want 1: %+v", len(events), events)
 	}
+
 	event := events[0]
 
 	if event.SNI != "google.de" {
 		t.Errorf("SNI = %q, want %q", event.SNI, "google.de")
 	}
+
 	if event.SrcIP != "192.168.4.149" {
 		t.Errorf("SrcIP = %q, want %q", event.SrcIP, "192.168.4.149")
 	}
+
 	if event.SrcPort != "55881" {
 		t.Errorf("SrcPort = %q, want %q", event.SrcPort, "55881")
 	}
+
 	if event.DstIP != "74.125.239.152" {
 		t.Errorf("DstIP = %q, want %q", event.DstIP, "74.125.239.152")
 	}
+
 	if event.DstPort != "443" {
 		t.Errorf("DstPort = %q, want %q", event.DstPort, "443")
 	}
+
 	want := time.Unix(1398362902, 726337000)
 	if diff := event.Timestamp.Sub(want); diff < -time.Microsecond || diff > time.Microsecond {
 		t.Errorf("Timestamp = %v, want %v (Zeek's ts, not the parse time)", event.Timestamp, want)
@@ -80,6 +95,7 @@ func TestNoticeParser_RealJSON(t *testing.T) {
 
 func TestNoticeParser_TSVLineBeforeHeader(t *testing.T) {
 	var dataLine string
+
 	for _, line := range readFixtureLines(t, "notice.tsv") {
 		if !strings.HasPrefix(line, "#") {
 			dataLine = line
@@ -97,6 +113,7 @@ func TestNoticeParser_IgnoresOtherNoticeTypes(t *testing.T) {
 	line = strings.Replace(line, bypassNote, "SSL::Invalid_Server_Cert", 1)
 
 	var parser noticeParser
+
 	_, ok, err := parser.parseLine(line)
 	if err != nil || ok {
 		t.Fatalf("parseLine() = ok %v, err %v; want a silent skip", ok, err)
@@ -129,6 +146,7 @@ func TestNoticeTailer_WaitsForCompleteLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	cut := strings.Index(string(data), "google.de") + len("goo")
 
 	path := filepath.Join(t.TempDir(), "notice.log")
@@ -140,6 +158,7 @@ func TestNoticeTailer_WaitsForCompleteLine(t *testing.T) {
 	tailer := &noticeTailer{path: path}
 
 	tailer.poll(events)
+
 	if len(events) != 0 {
 		t.Fatalf("got %d events from a half-written line, want 0", len(events))
 	}
@@ -147,13 +166,16 @@ func TestNoticeTailer_WaitsForCompleteLine(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+
 	tailer.poll(events)
 
 	close(events)
+
 	var got []Event
 	for event := range events {
 		got = append(got, event)
 	}
+
 	assertGoogleBypassEvent(t, got)
 }
 
@@ -162,6 +184,7 @@ func TestNoticeTailer_RelearnsHeaderAfterRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	path := filepath.Join(t.TempDir(), "notice.log")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -173,8 +196,11 @@ func TestNoticeTailer_RelearnsHeaderAfterRotation(t *testing.T) {
 	<-events
 
 	// Rotation: a fresh, smaller file with its own header.
-	var header strings.Builder
-	var dataLine string
+	var (
+		header   strings.Builder
+		dataLine string
+	)
+
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, "#fields") || strings.HasPrefix(line, "#separator") {
 			header.WriteString(line + "\n")
@@ -182,9 +208,11 @@ func TestNoticeTailer_RelearnsHeaderAfterRotation(t *testing.T) {
 			dataLine = line
 		}
 	}
+
 	if err := os.WriteFile(path, []byte(header.String()+dataLine+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+
 	tailer.poll(events)
 
 	if len(events) != 1 {
@@ -200,6 +228,7 @@ func TestNoticeTailer_SkipsExistingAlerts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	path := filepath.Join(t.TempDir(), "notice.log")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -209,26 +238,32 @@ func TestNoticeTailer_SkipsExistingAlerts(t *testing.T) {
 	tailer := &noticeTailer{path: path}
 	tailer.skipExisting()
 	tailer.poll(events)
+
 	if len(events) != 0 {
 		t.Fatalf("got %d replayed events, want 0", len(events))
 	}
 
 	var dataLine string
+
 	for _, line := range strings.Split(string(data), "\n") {
 		if line != "" && !strings.HasPrefix(line, "#") {
 			dataLine = line
 		}
 	}
+
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := file.WriteString(dataLine + "\n"); err != nil {
 		t.Fatal(err)
 	}
+
 	_ = file.Close()
 
 	tailer.poll(events)
+
 	if len(events) != 1 {
 		t.Fatalf("got %d events for a new alert, want 1", len(events))
 	}
@@ -245,7 +280,9 @@ func TestDNSBypassScriptEmbedded(t *testing.T) {
 // Not parallel: it swaps the default logger.
 func TestNoticeTailer_LogsFileStateOnce(t *testing.T) {
 	var logs bytes.Buffer
+
 	previous := slog.Default()
+
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 
@@ -254,9 +291,11 @@ func TestNoticeTailer_LogsFileStateOnce(t *testing.T) {
 	events := make(chan Event, 10)
 
 	tailer.skipExisting()
+
 	for range 5 {
 		tailer.poll(events)
 	}
+
 	if got := strings.Count(logs.String(), "waiting for notice log"); got != 1 {
 		t.Fatalf("logged 'waiting' %d times over 6 polls, want 1:\n%s", got, logs.String())
 	}
@@ -265,12 +304,15 @@ func TestNoticeTailer_LogsFileStateOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+
 	for range 3 {
 		tailer.poll(events)
 	}
+
 	if got := strings.Count(logs.String(), "notice log found"); got != 1 {
 		t.Fatalf("logged 'found' %d times, want 1:\n%s", got, logs.String())
 	}

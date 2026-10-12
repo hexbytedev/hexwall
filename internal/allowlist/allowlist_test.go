@@ -71,9 +71,11 @@ func TestParseCIDR(t *testing.T) {
 				if err == nil {
 					t.Fatalf("parseCIDR(%q) error = nil, want %q", tc.value, tc.wantErr)
 				}
+
 				if err.Error() != tc.wantErr {
 					t.Fatalf("parseCIDR(%q) error = %q, want %q", tc.value, err.Error(), tc.wantErr)
 				}
+
 				return
 			}
 
@@ -94,6 +96,7 @@ func TestParseCIDR(t *testing.T) {
 				if ip == nil {
 					t.Fatalf("net.ParseIP(%q) = nil", ipText)
 				}
+
 				if !got.Contains(ip) {
 					t.Fatalf("network %q does not contain %q", got.String(), ipText)
 				}
@@ -104,6 +107,7 @@ func TestParseCIDR(t *testing.T) {
 				if ip == nil {
 					t.Fatalf("net.ParseIP(%q) = nil", ipText)
 				}
+
 				if got.Contains(ip) {
 					t.Fatalf("network %q unexpectedly contains %q", got.String(), ipText)
 				}
@@ -143,11 +147,13 @@ func TestLoadCIDRs(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			nets = nil
+
 			if tc.name == "keeps existing nets and appends new ones" {
 				existing, err := parseCIDR("127.0.0.0/8")
 				if err != nil {
 					t.Fatalf("parseCIDR(existing) error = %v", err)
 				}
+
 				nets = []*net.IPNet{existing}
 			}
 
@@ -161,6 +167,7 @@ func TestLoadCIDRs(t *testing.T) {
 				if nets[i] == nil {
 					t.Fatalf("nets[%d] = nil, want %q", i, wantCIDR)
 				}
+
 				if nets[i].String() != wantCIDR {
 					t.Fatalf("nets[%d] = %q, want %q", i, nets[i].String(), wantCIDR)
 				}
@@ -176,6 +183,7 @@ func TestContains(t *testing.T) {
 	}()
 
 	nets = nil
+
 	loadCIDRs([]string{"10.0.0.0/8", "::1", "169.254.169.254"})
 
 	testCases := []struct {
@@ -232,6 +240,7 @@ func TestContains(t *testing.T) {
 
 func TestContainsWithNoNetworks(t *testing.T) {
 	originalNets := nets
+
 	nets = nil
 	defer func() {
 		nets = originalNets
@@ -260,11 +269,13 @@ func TestBuiltInRangesEdges(t *testing.T) {
 		"fec0::1", // just outside fe80::/10
 		"8.8.8.8", "1.1.1.1", "2001:4860:4860::8888",
 	}
+
 	for _, addr := range trusted {
 		if !Contains(net.ParseIP(addr)) {
 			t.Errorf("Contains(%s) = false, want true", addr)
 		}
 	}
+
 	for _, addr := range public {
 		if Contains(net.ParseIP(addr)) {
 			t.Errorf("Contains(%s) = true, want false: it can be a public address", addr)

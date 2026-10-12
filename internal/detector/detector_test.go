@@ -15,6 +15,7 @@ func installFakeDocker(t *testing.T, script string) {
 	t.Helper()
 
 	dir := t.TempDir()
+
 	path := filepath.Join(dir, "docker")
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake docker: %v", err)
@@ -25,6 +26,7 @@ func installFakeDocker(t *testing.T, script string) {
 
 func writeRegularFile(t *testing.T, path string) {
 	t.Helper()
+
 	if err := os.WriteFile(path, []byte("fake db"), 0o644); err != nil {
 		t.Fatalf("write file %s: %v", path, err)
 	}
@@ -34,6 +36,7 @@ func writeRegularFile(t *testing.T, path string) {
 // called, for asserting the physical-path branch short-circuits correctly.
 func failDockerFallback(t *testing.T) func() (string, error) {
 	t.Helper()
+
 	return func() (string, error) {
 		t.Fatal("docker fallback should not have been called")
 		return "", nil
@@ -78,6 +81,7 @@ func TestFindDBPathPhysicalFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findDBPath() error = %v", err)
 	}
+
 	if got != physical {
 		t.Fatalf("findDBPath() = %q, want %q", got, physical)
 	}
@@ -92,6 +96,7 @@ func TestFindDBPathPhysicalIsDirectoryShortCircuits(t *testing.T) {
 	if err == nil {
 		t.Fatal("findDBPath() error = nil, want error")
 	}
+
 	if !strings.Contains(err.Error(), "failed to access physical pi-hole DB") {
 		t.Fatalf("findDBPath() error = %q, want it to mention accessing the physical DB", err)
 	}
@@ -110,6 +115,7 @@ func TestFindDBPathFallsBackToDockerWhenPhysicalMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findDBPath() error = %v", err)
 	}
+
 	if got != dockerPath {
 		t.Fatalf("findDBPath() = %q, want %q", got, dockerPath)
 	}
@@ -127,6 +133,7 @@ func TestFindDBPathBothMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("findDBPath() error = nil, want error")
 	}
+
 	if !strings.Contains(err.Error(), "pi-hole not found") {
 		t.Fatalf("findDBPath() error = %q, want it to mention 'pi-hole not found'", err)
 	}
@@ -141,6 +148,7 @@ func TestFindPiholeContainerMatchesByName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findPiholeContainer() error = %v", err)
 	}
+
 	if id != "abc123" {
 		t.Fatalf("findPiholeContainer() = %q, want %q", id, "abc123")
 	}
@@ -153,6 +161,7 @@ func TestFindPiholeContainerMatchesByImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findPiholeContainer() error = %v", err)
 	}
+
 	if id != "def456" {
 		t.Fatalf("findPiholeContainer() = %q, want %q", id, "def456")
 	}
@@ -165,6 +174,7 @@ func TestFindPiholeContainerCaseInsensitive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findPiholeContainer() error = %v", err)
 	}
+
 	if id != "ghi789" {
 		t.Fatalf("findPiholeContainer() = %q, want %q", id, "ghi789")
 	}
@@ -177,6 +187,7 @@ func TestFindPiholeContainerNoneFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("findPiholeContainer() error = nil, want error")
 	}
+
 	if !strings.Contains(err.Error(), "no running pi-hole container found") {
 		t.Fatalf("findPiholeContainer() error = %q, want it to mention no container found", err)
 	}
@@ -189,6 +200,7 @@ func TestFindPiholeContainerDockerNotRunning(t *testing.T) {
 	if err == nil {
 		t.Fatal("findPiholeContainer() error = nil, want error")
 	}
+
 	if !strings.Contains(err.Error(), "docker ps failed") {
 		t.Fatalf("findPiholeContainer() error = %q, want it to mention 'docker ps failed'", err)
 	}
@@ -209,6 +221,7 @@ func TestFindDockerDBPathSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findDockerDBPath() error = %v", err)
 	}
+
 	want := filepath.Join(mountDir, ftlDBFilename)
 	if got != want {
 		t.Fatalf("findDockerDBPath() = %q, want %q", got, want)
@@ -225,6 +238,7 @@ func TestFindDockerDBPathNoPiholeMount(t *testing.T) {
 	if err == nil {
 		t.Fatal("findDockerDBPath() error = nil, want error")
 	}
+
 	if !strings.Contains(err.Error(), "no /etc/pihole mount detected") {
 		t.Fatalf("findDockerDBPath() error = %q, want it to mention no mount detected", err)
 	}
@@ -242,6 +256,7 @@ func TestFindDockerDBPathMountedButDBMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("findDockerDBPath() error = nil, want error")
 	}
+
 	if !strings.Contains(err.Error(), "DB not available at expected path") {
 		t.Fatalf("findDockerDBPath() error = %q, want it to mention DB not available", err)
 	}
@@ -254,6 +269,7 @@ func TestFindDockerDBPathContainerNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("findDockerDBPath() error = nil, want error")
 	}
+
 	if !strings.Contains(err.Error(), "no running pi-hole container found") {
 		t.Fatalf("findDockerDBPath() error = %q, want it to propagate the container-not-found error", err)
 	}
@@ -269,6 +285,7 @@ func TestFindDockerDBPathInspectFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("findDockerDBPath() error = nil, want error")
 	}
+
 	if !strings.Contains(err.Error(), "docker inspect failed") {
 		t.Fatalf("findDockerDBPath() error = %q, want it to mention 'docker inspect failed'", err)
 	}
@@ -284,6 +301,7 @@ func TestFindDockerDBPathMalformedInspectJSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("findDockerDBPath() error = nil, want error")
 	}
+
 	if !strings.Contains(err.Error(), "failed to parse docker inspect output") {
 		t.Fatalf("findDockerDBPath() error = %q, want it to mention JSON parse failure", err)
 	}

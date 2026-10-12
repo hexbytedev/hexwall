@@ -40,14 +40,17 @@ func Install(out io.Writer, opts Options) error {
 	if os.Geteuid() != 0 {
 		return errors.New("writing systemd units needs root (run with sudo)")
 	}
+
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		return errors.New("systemctl not found: install-service only supports systemd")
 	}
+
 	return install(out, opts, unitDir, vendorUnitDirs, runSystemctl)
 }
 
 func install(out io.Writer, opts Options, dir string, vendorDirs []string, systemctl func(args ...string) error) error {
 	withZeek := false
+
 	if opts.Zeekctl != "" {
 		switch owned, err := zeekUnitOwner(dir, vendorDirs); {
 		case err != nil:
@@ -57,7 +60,9 @@ func install(out io.Writer, opts Options, dir string, vendorDirs []string, syste
 			if err != nil {
 				return err
 			}
+
 			report(out, zeekUnit, dir, changed)
+
 			withZeek = true
 		default:
 			_, _ = fmt.Fprintf(out, "✓ %s already exists and isn't hexwall's; left as is\n", zeekUnit)
@@ -69,12 +74,14 @@ func install(out io.Writer, opts Options, dir string, vendorDirs []string, syste
 	if err != nil {
 		return err
 	}
+
 	report(out, hexwallUnit, dir, changed)
 
 	steps := [][]string{{"daemon-reload"}}
 	if withZeek {
 		steps = append(steps, []string{"enable", "--now", zeekUnit})
 	}
+
 	steps = append(steps, []string{"enable", hexwallUnit}, []string{"restart", hexwallUnit})
 	for _, step := range steps {
 		if err := systemctl(step...); err != nil {
@@ -88,6 +95,7 @@ hexwall now starts at boot and restarts if it crashes.
   logs:     journalctl -u %[1]s -f
   remove:   sudo systemctl disable --now %[1]s
 `, hexwallUnit)
+
 	return nil
 }
 
@@ -97,10 +105,12 @@ func Uninstall(out io.Writer) error {
 	if os.Geteuid() != 0 {
 		return errors.New("removing systemd units needs root (run with sudo)")
 	}
+
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		_, _ = fmt.Fprintln(out, "✓ no systemd here; no units to remove")
 		return nil
 	}
+
 	return uninstall(out, unitDir, runSystemctl)
 }
 
@@ -109,24 +119,31 @@ func uninstall(out io.Writer, dir string, systemctl func(args ...string) error) 
 	// hexwall first: it is ordered after Zeek, so it stops before Zeek does.
 	for _, unit := range []string{hexwallUnit, zeekUnit} {
 		path := filepath.Join(dir, unit)
+
 		data, err := os.ReadFile(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
+
 		if err != nil {
 			return err
 		}
+
 		if !bytes.HasPrefix(data, []byte(marker)) {
 			_, _ = fmt.Fprintf(out, "! %s wasn't written by hexwall; left in place\n", path)
 			continue
 		}
+
 		if err := systemctl("disable", "--now", unit); err != nil {
 			return fmt.Errorf("systemctl disable --now %s: %w", unit, err)
 		}
+
 		if err := os.Remove(path); err != nil {
 			return err
 		}
+
 		_, _ = fmt.Fprintf(out, "✓ stopped and removed %s\n", path)
+
 		removed = append(removed, unit)
 	}
 
@@ -134,9 +151,11 @@ func uninstall(out io.Writer, dir string, systemctl func(args ...string) error) 
 		_, _ = fmt.Fprintln(out, "✓ no hexwall systemd units installed")
 		return nil
 	}
+
 	if err := systemctl("daemon-reload"); err != nil {
 		return fmt.Errorf("systemctl daemon-reload: %w", err)
 	}
+
 	return nil
 }
 
@@ -148,13 +167,16 @@ func zeekUnitOwner(dir string, vendorDirs []string) (bool, error) {
 			return false, nil
 		}
 	}
+
 	data, err := os.ReadFile(filepath.Join(dir, zeekUnit))
 	if errors.Is(err, os.ErrNotExist) {
 		return true, nil
 	}
+
 	if err != nil {
 		return false, err
 	}
+
 	return bytes.HasPrefix(data, []byte(marker)), nil
 }
 
@@ -162,9 +184,11 @@ func writeUnit(path, content string) (changed bool, err error) {
 	if current, err := os.ReadFile(path); err == nil && string(current) == content {
 		return false, nil
 	}
+
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return false, fmt.Errorf("write %s: %w", path, err)
 	}
+
 	return true, nil
 }
 
@@ -179,6 +203,7 @@ func report(out io.Writer, unit, dir string, changed bool) {
 func runSystemctl(args ...string) error {
 	cmd := exec.Command("systemctl", args...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+
 	return cmd.Run()
 }
 
@@ -189,10 +214,12 @@ func renderHexwallUnit(binary string, args []string, withZeek bool) string {
 		after += " " + zeekUnit
 		wants += " " + zeekUnit
 	}
+
 	execStart := make([]string, 0, len(args)+1)
 	for _, arg := range append([]string{binary}, args...) {
 		execStart = append(execStart, quoteExecArg(arg))
 	}
+
 	return marker + `
 [Unit]
 Description=hexwall outbound connection monitor
@@ -236,12 +263,15 @@ WantedBy=multi-user.target
 // treats % as a specifier and expands $ as an environment variable.
 func quoteExecArg(arg string) string {
 	arg = strings.ReplaceAll(arg, "%", "%%")
+
 	arg = strings.ReplaceAll(arg, "$", "$$")
 	if arg != "" && !strings.ContainsAny(arg, " \t\"'\\") {
 		return arg
 	}
+
 	arg = strings.ReplaceAll(arg, `\`, `\\`)
 	arg = strings.ReplaceAll(arg, `"`, `\"`)
+
 	return `"` + arg + `"`
 }
 
@@ -255,5 +285,6 @@ func WithSafeMode(args []string) []string {
 			return args
 		}
 	}
+
 	return append([]string{"--mode", "watch"}, args...)
 }

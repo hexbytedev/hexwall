@@ -66,6 +66,7 @@ func (p *noticeParser) parseLine(line string) (event Event, ok bool, err error) 
 		if fields := parseTSVFieldsLine(line); fields != nil {
 			p.tsvFields = fields
 		}
+
 		return Event{}, false, nil
 	}
 
@@ -73,6 +74,7 @@ func (p *noticeParser) parseLine(line string) (event Event, ok bool, err error) 
 	if err != nil {
 		return Event{}, false, err
 	}
+
 	if fields["note"] != bypassNote {
 		return Event{}, false, nil
 	}
@@ -107,6 +109,7 @@ func (p *noticeParser) fields(line string) (map[string]string, error) {
 		for name, value := range payload {
 			fields[name] = fmt.Sprint(value)
 		}
+
 		return fields, nil
 	}
 
@@ -115,6 +118,7 @@ func (p *noticeParser) fields(line string) (map[string]string, error) {
 	}
 
 	cols := strings.Split(line, "\t")
+
 	fields := make(map[string]string, len(p.tsvFields))
 	for name, i := range p.tsvFields {
 		// "-" is Zeek's unset-field marker, "(empty)" its empty-set marker.
@@ -122,6 +126,7 @@ func (p *noticeParser) fields(line string) (map[string]string, error) {
 			fields[name] = cols[i]
 		}
 	}
+
 	return fields, nil
 }
 
@@ -132,9 +137,11 @@ func parseZeekTime(value string) time.Time {
 		whole, frac := math.Modf(seconds)
 		return time.Unix(int64(whole), int64(frac*1e9))
 	}
+
 	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
 		return parsed
 	}
+
 	return time.Now()
 }
 
@@ -144,6 +151,7 @@ func firstNonEmpty(values ...string) string {
 			return value
 		}
 	}
+
 	return ""
 }
 
@@ -187,6 +195,7 @@ func (t *noticeTailer) read(events chan<- Event) {
 		return
 	}
 	defer func() { _ = file.Close() }()
+
 	if t.state != fileOpen {
 		slog.Info("zeek: notice log found, watching for DNS-bypass alerts", "path", t.path)
 		t.state = fileOpen
@@ -204,6 +213,7 @@ func (t *noticeTailer) read(events chan<- Event) {
 		t.offset = 0
 		t.parser = noticeParser{}
 	}
+
 	if fi.Size() == t.offset {
 		return
 	}
@@ -212,6 +222,7 @@ func (t *noticeTailer) read(events chan<- Event) {
 		slog.Debug("zeek: seek notice log failed", "path", t.path, "err", err)
 		return
 	}
+
 	data, err := io.ReadAll(file)
 	if err != nil {
 		slog.Debug("zeek: read notice log failed", "path", t.path, "err", err)
@@ -224,6 +235,7 @@ func (t *noticeTailer) read(events chan<- Event) {
 	if end == -1 {
 		return
 	}
+
 	t.offset += int64(end + 1)
 
 	for _, line := range strings.Split(string(data[:end]), "\n") {
@@ -237,8 +249,10 @@ func (t *noticeTailer) read(events chan<- Event) {
 			} else {
 				slog.Debug("zeek: notice log line could not be parsed", "path", t.path, "err", err)
 			}
+
 			continue
 		}
+
 		if !ok || events == nil {
 			continue
 		}
@@ -262,8 +276,10 @@ func (t *noticeTailer) reportOpenError(err error) {
 		// Whatever appears at this path next is a new file: read it from the start.
 		t.offset = 0
 		t.parser = noticeParser{}
+
 		return
 	}
+
 	if t.state != fileUnreadable {
 		slog.Warn("zeek: cannot open notice log; DNS-bypass alerts are not being read", "path", t.path, "err", err)
 		t.state = fileUnreadable
@@ -279,6 +295,7 @@ func WatchNoticeLog(ctx context.Context, path string, events chan<- Event) error
 
 	tailer := &noticeTailer{path: logPath}
 	tailer.skipExisting()
+
 	poller := time.NewTicker(2 * time.Second)
 	defer poller.Stop()
 

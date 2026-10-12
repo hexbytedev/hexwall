@@ -64,6 +64,7 @@ func (c *IPCache) Refresh(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -72,6 +73,7 @@ func (c *IPCache) Refresh(ctx context.Context) {
 		slog.Error("cache refresh: failed to query pi-hole domains", "err", err)
 		return
 	}
+
 	if len(domains) == 0 {
 		slog.Debug("cache refreshed", "domains", 0, "ips", 0)
 		return
@@ -83,9 +85,11 @@ func (c *IPCache) Refresh(ctx context.Context) {
 	// results channel keeps a worker from ever blocking on a consumer that has not
 	// started yet, which would otherwise pin its slot in sem and stall the spawn loop.
 	var mu sync.Mutex
+
 	resolved := make(map[string][]string, len(domains))
 
 	var wg sync.WaitGroup
+
 	for _, domain := range domains {
 		select {
 		case <-ctx.Done():
@@ -107,6 +111,7 @@ func (c *IPCache) Refresh(ctx context.Context) {
 			mu.Lock()
 			c.ownLookups[d] = c.now()
 			mu.Unlock()
+
 			ips, err := c.lookupHost(rctx, d)
 			if err != nil {
 				// DNS failure is normal for blocked domains, expired records, and similar cases.
@@ -129,6 +134,7 @@ func (c *IPCache) Refresh(ctx context.Context) {
 	// domains is sorted, so each IP's slice stays in a stable order and its first entry
 	// is the one recorded as the representative domain in allowed_ips.
 	ipDomains := make(map[string][]string, len(resolved))
+
 	seen := make(map[string]struct{}, len(resolved))
 	for _, domain := range domains {
 		ips, ok := resolved[domain]
@@ -141,13 +147,18 @@ func (c *IPCache) Refresh(ctx context.Context) {
 			if _, exists := seen[key]; exists {
 				continue
 			}
+
 			seen[key] = struct{}{}
+
 			ipDomains[ip] = append(ipDomains[ip], domain)
 		}
 	}
 
-	var totalIPs int
-	var totalPairs int
+	var (
+		totalIPs   int
+		totalPairs int
+	)
+
 	for ip, ipDomainSet := range ipDomains {
 		if err := c.store.UpsertAllowedIP(ip, ipDomainSet[0]); err != nil {
 			slog.Error("cache refresh: failed to upsert IP", "ip", ip, "domain", ipDomainSet[0], "err", err)
@@ -174,6 +185,7 @@ func (c *IPCache) newClientDomains() ([]string, error) {
 	if c.ownLookups == nil {
 		c.ownLookups = make(map[string]time.Time)
 	}
+
 	for domain, at := range c.ownLookups {
 		if now.Sub(at) > ownLookupMemory {
 			delete(c.ownLookups, domain)
@@ -184,8 +196,10 @@ func (c *IPCache) newClientDomains() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if maxID < c.lastID {
 		slog.Info("cache refresh: pi-hole query log was reset; re-reading the last hour")
+
 		c.lastID = 0
 	}
 
@@ -195,14 +209,18 @@ func (c *IPCache) newClientDomains() ([]string, error) {
 	}
 
 	var domains []string
+
 	for _, q := range queries {
 		c.lastID = max(c.lastID, q.ID)
 		if c.isOwnLookup(q) {
 			continue
 		}
+
 		domains = append(domains, q.Domain)
 	}
+
 	slices.Sort(domains)
+
 	return slices.Compact(domains), nil
 }
 
@@ -214,6 +232,7 @@ func (c *IPCache) isOwnLookup(q AnsweredQuery) bool {
 	if !ok {
 		return false
 	}
+
 	return !q.Timestamp.Before(at.Add(-ownLookupSlack)) &&
 		!q.Timestamp.After(at.Add(lookupTimeout+ownLookupSlack))
 }

@@ -141,6 +141,7 @@ func (o SNIOutcome) Valid() bool {
 	case OutcomePolicyAllowed, OutcomePolicyBlocked, OutcomeIPDomainMatch, OutcomeUnknown:
 		return true
 	}
+
 	return false
 }
 
@@ -151,6 +152,7 @@ func ParseSNIOutcome(s string) (SNIOutcome, bool) {
 	if o.Valid() {
 		return o, true
 	}
+
 	return OutcomeUnknown, false
 }
 
@@ -174,6 +176,7 @@ func (o IPOutcome) Valid() bool {
 	case OutcomeIPTrusted, OutcomeIPReserved, OutcomeIPBlocked, OutcomeIPUnknown:
 		return true
 	}
+
 	return false
 }
 
@@ -184,6 +187,7 @@ func ParseIPOutcome(s string) (IPOutcome, bool) {
 	if o.Valid() {
 		return o, true
 	}
+
 	return OutcomeIPUnknown, false
 }
 
@@ -222,19 +226,24 @@ func migrateSNITable(db *sql.DB) error {
 	}()
 
 	hasOldSchema := false
+
 	for cols.Next() {
-		var cid int
-		var name, ctype string
-		var notNull int
-		var dfltValue sql.NullString
-		var pk int
+		var (
+			cid         int
+			name, ctype string
+			notNull     int
+			dfltValue   sql.NullString
+			pk          int
+		)
 		if err := cols.Scan(&cid, &name, &ctype, &notNull, &dfltValue, &pk); err != nil {
 			return fmt.Errorf("scan table info: %w", err)
 		}
+
 		if name == "known" {
 			hasOldSchema = true
 		}
 	}
+
 	if err := cols.Err(); err != nil {
 		return fmt.Errorf("iterate table info: %w", err)
 	}
@@ -244,9 +253,11 @@ func migrateSNITable(db *sql.DB) error {
 	}
 
 	slog.Warn("dropping old sni_observations table (write-only audit data; no readers)", "reason", "schema migration to state-table format")
+
 	if _, err := db.Exec(`DROP TABLE sni_observations`); err != nil {
 		return fmt.Errorf("drop old sni_observations: %w", err)
 	}
+
 	return nil
 }
 
@@ -258,12 +269,15 @@ func migrateKillOutcome(db *sql.DB) error {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('killed_connections') WHERE name = 'outcome'`).Scan(&has); err != nil {
 		return fmt.Errorf("query table info: %w", err)
 	}
+
 	if has > 0 {
 		return nil
 	}
+
 	if _, err := db.Exec(`ALTER TABLE killed_connections ADD COLUMN outcome TEXT NOT NULL DEFAULT 'unknown'`); err != nil {
 		return fmt.Errorf("add outcome column: %w", err)
 	}
+
 	return nil
 }
 
@@ -318,6 +332,7 @@ func NewStore(dbPath string) (*Store, error) {
 	if err := configureConnection(readOnly, true); err != nil {
 		_ = readOnly.Close()
 		_ = readWrite.Close()
+
 		return nil, fmt.Errorf("failed to connect to hexwall db read-only connection: %w", err)
 	}
 
@@ -363,8 +378,10 @@ func (s *Store) Close() error {
 		return nil
 	}
 
-	var errReadWrite error
-	var errReadOnly error
+	var (
+		errReadWrite error
+		errReadOnly  error
+	)
 
 	if s.readWrite != nil {
 		errReadWrite = s.readWrite.Close()
@@ -389,7 +406,6 @@ func (s *Store) UpsertAllowedIP(ip, domain string) error {
 			domain        = excluded.domain,
 			last_refreshed = excluded.last_refreshed
 	`, ip, domain, now, now)
-
 	if err != nil {
 		return fmt.Errorf("upsert allowed ip %s: %w", ip, err)
 	}
@@ -411,7 +427,6 @@ func (s *Store) UpsertAllowedIPDomain(ip, domain string) error {
 		ON CONFLICT(ip, domain) DO UPDATE SET
 			last_refreshed = excluded.last_refreshed
 	`, ip, domain, now, now)
-
 	if err != nil {
 		return fmt.Errorf("upsert allowed ip domain %s/%s: %w", ip, domain, err)
 	}
@@ -439,6 +454,7 @@ func (s *Store) DomainsForIP(ip string) ([]string, error) {
 	}()
 
 	domains := []string{}
+
 	for rows.Next() {
 		var domain string
 		if err := rows.Scan(&domain); err != nil {
@@ -461,7 +477,6 @@ func (s *Store) UpdateEstablished(ip string) error {
 	_, err := s.readWrite.Exec(`
 		UPDATE allowed_ips SET last_established = ? WHERE ip = ?
 	`, time.Now().Unix(), ip)
-
 	if err != nil {
 		return fmt.Errorf("update established %s: %w", ip, err)
 	}
@@ -481,6 +496,7 @@ func (s *Store) IsAllowed(ip string) (bool, error) {
 	establishedCutoff := now.Add(-establishedTrustWindow).Unix()
 
 	var found int
+
 	err := s.readOnly.QueryRow(`
 		SELECT 1 FROM allowed_ips
 		WHERE ip = ?
@@ -504,8 +520,11 @@ func (s *Store) IsAllowed(ip string) (bool, error) {
 func (s *Store) GetRecentFraudCheck(ip string) (*FraudCheckCacheEntry, error) {
 	cutoff := time.Now().Add(-fraudCheckCacheWindow).Unix()
 
-	var shouldKill int
-	var checkedAt int64
+	var (
+		shouldKill int
+		checkedAt  int64
+	)
+
 	err := s.readOnly.QueryRow(`
 		SELECT should_kill, checked_at
 		FROM fraud_checks
@@ -542,7 +561,6 @@ func (s *Store) UpsertFraudCheck(ip string, shouldKill bool) error {
 			should_kill = excluded.should_kill,
 			checked_at = excluded.checked_at
 	`, ip, shouldKillInt, time.Now().Unix())
-
 	if err != nil {
 		return fmt.Errorf("upsert fraud check %s: %w", ip, err)
 	}
@@ -555,8 +573,11 @@ func (s *Store) GetRecentDomainCheck(domain string) (*DomainCheckCacheEntry, err
 	domain = strings.ToLower(strings.TrimSpace(domain))
 	cutoff := time.Now().Add(-fraudCheckCacheWindow).Unix()
 
-	var shouldBlock int
-	var checkedAt int64
+	var (
+		shouldBlock int
+		checkedAt   int64
+	)
+
 	err := s.readOnly.QueryRow(`
 		SELECT should_block, checked_at
 		FROM domain_checks
@@ -595,7 +616,6 @@ func (s *Store) UpsertDomainCheck(domain string, shouldBlock bool) error {
 			should_block = excluded.should_block,
 			checked_at = excluded.checked_at
 	`, domain, shouldBlockInt, time.Now().Unix())
-
 	if err != nil {
 		return fmt.Errorf("upsert domain check %s: %w", domain, err)
 	}
@@ -619,6 +639,7 @@ func (s *Store) LogKill(ip, pid, program string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("log kill %s: read row id: %w", ip, err)
 	}
+
 	return id, nil
 }
 
@@ -641,6 +662,7 @@ func (s *Store) SetKillOutcome(id int64, outcome KillOutcome) error {
 	if _, err := s.readWrite.Exec(`UPDATE killed_connections SET outcome = ? WHERE id = ?`, outcome, id); err != nil {
 		return fmt.Errorf("set kill outcome %d: %w", id, err)
 	}
+
 	return nil
 }
 
@@ -666,13 +688,15 @@ func (s *Store) LogZeekAlert(srcIP, dstIP, dstPort, sni string, blocked bool, co
 func (s *Store) RecentZeekAlert(srcIP, sni string) (*ZeekAlertEntry, error) {
 	cutoff := time.Now().Add(-time.Hour).Unix()
 
-	var id int64
-	var dstIP string
-	var dstPort string
-	var blockedInt int
-	var confidence string
-	var detectedAt int64
-	var actionTaken string
+	var (
+		id          int64
+		dstIP       string
+		dstPort     string
+		blockedInt  int
+		confidence  string
+		detectedAt  int64
+		actionTaken string
+	)
 
 	err := s.readOnly.QueryRow(`
 		SELECT id, dst_ip, dst_port, blocked, confidence, detected_at, action_taken
@@ -686,6 +710,7 @@ func (s *Store) RecentZeekAlert(srcIP, sni string) (*ZeekAlertEntry, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
+
 	if err != nil {
 		return nil, fmt.Errorf("get recent zeek alert for %s: %w", srcIP, err)
 	}
@@ -718,7 +743,6 @@ func (s *Store) LogSNIObservation(ip, domain, localPort string, outcome SNIOutco
 			last_seen  = excluded.last_seen,
 			times_seen = sni_observations.times_seen + 1
 	`, ip, domain, localPort, string(outcome), now, now)
-
 	if err != nil {
 		return fmt.Errorf("log sni observation %s: %w", ip, err)
 	}
@@ -740,7 +764,6 @@ func (s *Store) LogIPObservation(ip, program string, outcome IPOutcome) error {
 			last_seen  = excluded.last_seen,
 			times_seen = ip_observations.times_seen + 1
 	`, ip, program, string(outcome), now, now)
-
 	if err != nil {
 		return fmt.Errorf("log ip observation %s: %w", ip, err)
 	}
@@ -769,6 +792,7 @@ func (s *Store) Prune() (*PruneResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("prune allowed_ip_domains: %w", err)
 	}
+
 	result.AllowedIPDomains, _ = r.RowsAffected()
 
 	// sni_observations: operational state data with a 7-day window.
@@ -776,6 +800,7 @@ func (s *Store) Prune() (*PruneResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("prune sni_observations: %w", err)
 	}
+
 	result.SNIObservations, _ = r.RowsAffected()
 
 	// ip_observations: same 7-day window as sni_observations.
@@ -783,6 +808,7 @@ func (s *Store) Prune() (*PruneResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("prune ip_observations: %w", err)
 	}
+
 	result.IPObservations, _ = r.RowsAffected()
 
 	// killed_connections and zeek_alerts: audit records of rare, potentially forensically
@@ -791,12 +817,14 @@ func (s *Store) Prune() (*PruneResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("prune killed_connections: %w", err)
 	}
+
 	result.KilledConnections, _ = r.RowsAffected()
 
 	r, err = s.readWrite.Exec(`DELETE FROM zeek_alerts WHERE detected_at < ?`, now-int64(pruneKilledAlertsWindow.Seconds()))
 	if err != nil {
 		return nil, fmt.Errorf("prune zeek_alerts: %w", err)
 	}
+
 	result.ZeekAlerts, _ = r.RowsAffected()
 
 	return result, nil

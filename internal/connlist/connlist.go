@@ -66,6 +66,7 @@ func selectBackend(goos string, ssAvailable func() bool, somoInstalled func() er
 // GetEstablishedConnections returns a list of established TCP/UDP connections.
 func GetEstablishedConnections() ([]Connection, error) {
 	cmd := exec.Command("somo", "-e", "--json", "--no-pager")
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, commandError("failed to run somo", err, output)

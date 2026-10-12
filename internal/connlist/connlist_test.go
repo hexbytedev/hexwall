@@ -15,6 +15,7 @@ func installFakeSomo(t *testing.T, script string) {
 	t.Helper()
 
 	dir := t.TempDir()
+
 	path := filepath.Join(dir, "somo")
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake somo: %v", err)
@@ -57,6 +58,7 @@ echo '[{"proto":"tcp","local_port":"51820","remote_address":"203.0.113.10","remo
 	if err != nil {
 		t.Fatalf("GetEstablishedConnections() error = %v", err)
 	}
+
 	if len(conns) != 1 {
 		t.Fatalf("GetEstablishedConnections() len = %d, want 1", len(conns))
 	}
@@ -83,6 +85,7 @@ func TestGetEstablishedConnectionsEmptyArray(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEstablishedConnections() error = %v", err)
 	}
+
 	if len(conns) != 0 {
 		t.Fatalf("GetEstablishedConnections() len = %d, want 0", len(conns))
 	}
@@ -95,6 +98,7 @@ func TestGetEstablishedConnectionsMalformedJSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("GetEstablishedConnections() error = nil, want error for malformed JSON")
 	}
+
 	if !strings.Contains(err.Error(), "failed to parse") {
 		t.Fatalf("GetEstablishedConnections() error = %q, want it to mention %q", err.Error(), "failed to parse")
 	}
@@ -107,6 +111,7 @@ func TestGetEstablishedConnectionsNonZeroExit(t *testing.T) {
 	if err == nil {
 		t.Fatal("GetEstablishedConnections() error = nil, want error for non-zero exit")
 	}
+
 	if !strings.Contains(err.Error(), "permission denied") {
 		t.Fatalf("GetEstablishedConnections() error = %q, want it to include command output", err.Error())
 	}
@@ -155,6 +160,7 @@ func TestCommandError(t *testing.T) {
 			if got.Error() != tt.want {
 				t.Fatalf("commandError() = %q, want %q", got.Error(), tt.want)
 			}
+
 			if !errors.Is(got, wrapped) {
 				t.Fatal("commandError() does not wrap the original error")
 			}

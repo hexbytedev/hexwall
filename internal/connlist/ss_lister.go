@@ -23,6 +23,7 @@ func SSAvailable() bool {
 // the preferred backend when iproute2 is available (Linux, not macOS).
 func GetEstablishedConnectionsViaSS() ([]Connection, error) {
 	cmd := exec.Command("ss", "-H", "-tnp", "state", "established")
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, commandError("failed to run ss", err, output)
@@ -50,6 +51,7 @@ func parseSSOutput(output string) []Connection {
 		if err != nil {
 			continue
 		}
+
 		remoteHost, remotePort, err := splitSSAddress(fields[3])
 		if err != nil {
 			continue

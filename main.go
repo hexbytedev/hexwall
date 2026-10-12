@@ -67,6 +67,7 @@ func parseFlags(args []string) (*runConfig, error) {
 	enableDeghostDomain := flags.Bool("enable-deghost-domain", false, "send unrecognized SNI domains to the third-party reputation API (deghostapi.hexbyte.dev) at rung 6")
 	mode := flags.String("mode", monitor.ModeWatch, "monitor mode: watch (detect only) or enforce (kill + log)")
 	debug := flags.Bool("debug", false, "enable debug-level logging, including verbose per-connection scan logging")
+
 	showVersion := flags.Bool("version", false, "print version and exit")
 	if err := flags.Parse(args); err != nil {
 		return nil, err
@@ -93,6 +94,7 @@ func parseFlags(args []string) (*runConfig, error) {
 	if selectedMode != monitor.ModeWatch && selectedMode != monitor.ModeEnforce {
 		return nil, fmt.Errorf("invalid --mode value %q: allowed %q or %q", cfg.mode, monitor.ModeWatch, monitor.ModeEnforce)
 	}
+
 	cfg.mode = selectedMode
 
 	if cfg.hexwallDBPath == "" {
@@ -110,13 +112,16 @@ func run() int {
 			fmt.Fprintln(os.Stderr, "zeek-setup:", err)
 			return 1
 		}
+
 		return 0
 	}
+
 	if len(os.Args) > 1 && os.Args[1] == "install-service" {
 		if err := installService(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "install-service:", err)
 			return 1
 		}
+
 		return 0
 	}
 
@@ -125,6 +130,7 @@ func run() int {
 			fmt.Fprintln(os.Stderr, "uninstall:", err)
 			return 1
 		}
+
 		return 0
 	}
 
@@ -132,6 +138,7 @@ func run() int {
 	if errors.Is(err, flag.ErrHelp) {
 		return 0
 	}
+
 	if err != nil {
 		slog.Error(err.Error())
 		return 1
@@ -146,6 +153,7 @@ func run() int {
 	if cfg.debug {
 		logLevel = slog.LevelDebug
 	}
+
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
 
 	if cfg.showVersion {
@@ -158,6 +166,7 @@ func run() int {
 		slog.Error("windows is not supported by hexwall")
 		return 1
 	}
+
 	slog.Info("detected OS", "os", runtime.GOOS)
 
 	if fatal, msg := privilegeCheck(cfg.mode, os.Geteuid()); fatal {
@@ -176,8 +185,10 @@ func run() int {
 	if err != nil {
 		fmt.Println("No connection-listing tool available:", err)
 		slog.Error("no connection-listing tool available", "err", err)
+
 		return 1
 	}
+
 	fmt.Printf("> Using %s for connection listing.\n", toolName)
 	slog.Info("using connection-listing tool", "tool", toolName)
 
@@ -215,6 +226,7 @@ func run() int {
 			"gravity", counts["vw_gravity"],
 			"regex_allow", counts["vw_regex_allowlist"],
 			"regex_deny", counts["vw_regex_denylist"])
+
 		if counts["vw_gravity"] == 0 {
 			slog.Warn("pi-hole gravity list is empty; blocklist may be broken or not yet downloaded")
 		}
@@ -224,9 +236,11 @@ func run() int {
 	hexwallStore, err := store.NewStore(cfg.hexwallDBPath)
 	if err != nil {
 		slog.Error("failed to open hexwall database", "path", cfg.hexwallDBPath, "err", err)
+
 		if strings.Contains(err.Error(), "readonly database") || errors.Is(err, fs.ErrPermission) {
 			slog.Error("the database file belongs to another user (often root, from an earlier sudo run): run with sudo, or pick another --hexwall-db")
 		}
+
 		return 1
 	}
 	defer func() {
@@ -251,17 +265,18 @@ func run() int {
 
 	// 4b. Start the Zeek ssl.log tailer when a path is provided.
 	var zeekClient *zeek.Client
+
 	if cfg.zeekLogPath != "" {
 		zc, err := zeek.NewClient(&zeek.Config{
 			LogPath: cfg.zeekLogPath,
 		})
-
 		if err != nil {
 			slog.Error("failed to start zeek log watcher", "path", cfg.zeekLogPath, "err", err)
 			return 1
 		}
 
 		defer zc.Close()
+
 		zeekClient = zc
 	}
 
@@ -297,6 +312,7 @@ func run() int {
 	}
 
 	var zeekEvents = make(chan zeek.Event, 100)
+
 	if cfg.enableZeek && cfg.zeekNoticeLog != "" {
 		go func() {
 			if err := zeek.WatchNoticeLog(ctx, cfg.zeekNoticeLog, zeekEvents); err != nil {
@@ -330,6 +346,7 @@ func run() int {
 				return
 			case <-ticker.C:
 				cache.Refresh(ctx)
+
 				if err := checker.RefreshRegexLists(); err != nil {
 					slog.Warn("pi-hole regex list refresh failed; keeping previous rules", "err", err)
 				}
@@ -363,6 +380,7 @@ func run() int {
 
 	fmt.Println("Starting network monitor...")
 	fmt.Printf("> Connections will be checked every %s in %s mode.\n", connectionScanInterval, cfg.mode)
+
 	if cfg.debug {
 		fmt.Println("> Debug logging is enabled for every scanned connection.")
 	}
@@ -387,6 +405,7 @@ func installService(args []string) error {
 	if runtime.GOOS != "linux" {
 		return errors.New("only Linux with systemd is supported")
 	}
+
 	args = service.WithSafeMode(args)
 	// Reject bad flags now: in a unit they would crash-loop at every boot instead.
 	cfg, err := parseFlags(args)
@@ -398,9 +417,11 @@ func installService(args []string) error {
 	if err != nil {
 		return err
 	}
+
 	if binary, err = filepath.EvalSymlinks(binary); err != nil {
 		return err
 	}
+
 	if strings.Contains(binary, "go-build") {
 		return errors.New("this binary is temporary (go run); build hexwall and run the built binary instead")
 	}
@@ -411,12 +432,15 @@ func installService(args []string) error {
 			return err
 		}
 	}
+
 	if err := service.Install(os.Stdout, opts); err != nil {
 		return err
 	}
+
 	if cfg.mode == monitor.ModeWatch {
 		fmt.Println("\nRunning in watch mode: nothing is killed. Re-run with --mode enforce once the logs look right.")
 	}
+
 	return nil
 }
 
@@ -431,14 +455,17 @@ func uninstall() error {
 	if err := service.Uninstall(os.Stdout); err != nil {
 		return err
 	}
+
 	if err := zeek.Teardown(os.Stdout); err != nil {
 		return err
 	}
+
 	fmt.Println(`
 Kept on purpose:
   /var/lib/hexwall   the service's database, with its kill and alert history
                      (delete it with: sudo rm -r /var/lib/hexwall)
   this binary        delete it yourself if you installed it (e.g. /usr/local/bin/hexwall)`)
+
 	return nil
 }
 
@@ -450,8 +477,10 @@ func privilegeCheck(mode string, euid int) (fatal bool, msg string) {
 	if euid == 0 {
 		return false, ""
 	}
+
 	if mode == monitor.ModeEnforce {
 		return true, "enforce mode needs root: without it hexwall can't close connections or stop other users' programs (run with sudo)"
 	}
+
 	return false, "not running as root: other users' programs show without a name, and Zeek's logs may be unreadable (run with sudo for the full picture)"
 }

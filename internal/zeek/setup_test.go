@@ -16,6 +16,7 @@ func TestInstallScript_WritesThenSkipsIdentical(t *testing.T) {
 	if err != nil || !changed {
 		t.Fatalf("first installScript() = %v, %v; want true, nil", changed, err)
 	}
+
 	got, err := os.ReadFile(filepath.Join(siteDir, scriptName))
 	if err != nil || string(got) != string(DNSBypassScript) {
 		t.Fatalf("installed script differs from the embedded one (err %v)", err)
@@ -42,6 +43,7 @@ func TestInstallScript_ReplacesOutdatedCopy(t *testing.T) {
 
 func TestEnsureLoaded_AppendsOnce(t *testing.T) {
 	localZeek := filepath.Join(t.TempDir(), "local.zeek")
+
 	original := "@load misc/detect-traceroute\n@load tuning/defaults" // no trailing newline
 	if err := os.WriteFile(localZeek, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
@@ -55,10 +57,12 @@ func TestEnsureLoaded_AppendsOnce(t *testing.T) {
 	}
 
 	data, _ := os.ReadFile(localZeek)
+
 	lines := strings.Split(string(data), "\n")
 	if !slices.Contains(lines, "@load tuning/defaults") {
 		t.Fatalf("last existing line was mangled:\n%s", data)
 	}
+
 	if strings.Count(string(data), loadLine) != 1 {
 		t.Fatalf("want exactly one %q line:\n%s", loadLine, data)
 	}
@@ -83,10 +87,12 @@ interface=af_packet::wlx001ea6c37e44
 	}
 
 	exists := func(name string) bool { return name == "wlx001ea6c37e44" }
+
 	missing, err := missingInterfaces(nodeCfg, exists)
 	if err != nil {
 		t.Fatalf("missingInterfaces() error = %v", err)
 	}
+
 	if !slices.Equal(missing, []string{"eth0"}) {
 		t.Fatalf("missingInterfaces() = %v, want [eth0]", missing)
 	}
@@ -101,10 +107,12 @@ func TestZeekLogDir(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(prefix, "etc"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	cfg := "# Log rotation\nLogRotationInterval = 3600\nLogDir = /var/log/zeek\n"
 	if err := os.WriteFile(filepath.Join(prefix, "etc", "zeekctl.cfg"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if got := zeekLogDir(prefix); got != "/var/log/zeek" {
 		t.Fatalf("zeekLogDir() = %q, want %q", got, "/var/log/zeek")
 	}
@@ -113,6 +121,7 @@ func TestZeekLogDir(t *testing.T) {
 // Setup then Teardown must give local.zeek back exactly as it was.
 func TestRemoveLoad_UndoesEnsureLoaded(t *testing.T) {
 	localZeek := filepath.Join(t.TempDir(), "local.zeek")
+
 	original := "@load misc/detect-traceroute\n\n@load tuning/defaults\n"
 	if err := os.WriteFile(localZeek, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
@@ -121,10 +130,12 @@ func TestRemoveLoad_UndoesEnsureLoaded(t *testing.T) {
 	if _, err := ensureLoaded(localZeek); err != nil {
 		t.Fatal(err)
 	}
+
 	removed, err := removeLoad(localZeek)
 	if err != nil || !removed {
 		t.Fatalf("removeLoad() = %v, %v; want true, nil", removed, err)
 	}
+
 	got, _ := os.ReadFile(localZeek)
 	if string(got) != original {
 		t.Fatalf("local.zeek after setup+teardown:\n%q\nwant:\n%q", got, original)
@@ -142,6 +153,7 @@ func TestRemoveScript_OnlyDeletesHexwallsOwn(t *testing.T) {
 	if err := os.WriteFile(ours, DNSBypassScript, 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if deleted, err := removeScript(ours); err != nil || !deleted {
 		t.Fatalf("removeScript(hexwall's script) = %v, %v; want true, nil", deleted, err)
 	}
@@ -150,9 +162,11 @@ func TestRemoveScript_OnlyDeletesHexwallsOwn(t *testing.T) {
 	if err := os.WriteFile(foreign, []byte("# someone's own dns-bypass\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	if deleted, err := removeScript(foreign); err != nil || deleted {
 		t.Fatalf("removeScript(foreign) = %v, %v; want false, nil", deleted, err)
 	}
+
 	if _, err := os.Stat(foreign); err != nil {
 		t.Fatalf("foreign script was deleted: %v", err)
 	}
@@ -167,12 +181,14 @@ func TestRemoveScript_OnlyDeletesHexwallsOwn(t *testing.T) {
 func fakeZeek(t *testing.T, iface string) (siteDir, prefix string) {
 	t.Helper()
 	prefix = t.TempDir()
+
 	siteDir = filepath.Join(prefix, "share", "zeek", "site")
 	for _, dir := range []string{siteDir, filepath.Join(prefix, "etc"), filepath.Join(prefix, "bin")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
+
 	files := map[string]string{
 		filepath.Join(siteDir, "local.zeek"):        "@load misc/detect-traceroute\n",
 		filepath.Join(prefix, "etc", "node.cfg"):    "[zeek]\ntype=standalone\ninterface=" + iface + "\n",
@@ -184,16 +200,20 @@ func fakeZeek(t *testing.T, iface string) (siteDir, prefix string) {
 			t.Fatal(err)
 		}
 	}
+
 	t.Setenv("PATH", filepath.Join(prefix, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
+
 	return siteDir, prefix
 }
 
 func anyInterface(t *testing.T) string {
 	t.Helper()
+
 	names := interfaceNames()
 	if len(names) == 0 {
 		t.Skip("no network interfaces")
 	}
+
 	return names[0]
 }
 
@@ -207,9 +227,11 @@ func TestSetupThenTeardown(t *testing.T) {
 	if err := Setup(&out); err != nil {
 		t.Fatalf("Setup() error = %v\n%s", err, out.String())
 	}
+
 	if installed, err := os.ReadFile(filepath.Join(siteDir, scriptName)); err != nil || !bytes.Equal(installed, DNSBypassScript) {
 		t.Fatalf("script not installed (err %v)", err)
 	}
+
 	for _, want := range []string{
 		filepath.Join(prefix, "bin", "zeekctl") + " deploy",
 		"--zeek-log " + filepath.Join(prefix, "logs", "current", "ssl.log"),
@@ -223,9 +245,11 @@ func TestSetupThenTeardown(t *testing.T) {
 	if err := Teardown(&bytes.Buffer{}); err != nil {
 		t.Fatalf("Teardown() error = %v", err)
 	}
+
 	if _, err := os.Stat(filepath.Join(siteDir, scriptName)); !os.IsNotExist(err) {
 		t.Fatalf("script still installed after Teardown (err %v)", err)
 	}
+
 	if after, _ := os.ReadFile(filepath.Join(siteDir, "local.zeek")); !bytes.Equal(after, original) {
 		t.Fatalf("local.zeek after Setup+Teardown:\n%q\nwant:\n%q", after, original)
 	}
@@ -236,10 +260,12 @@ func TestSetupReportsMissingInterface(t *testing.T) {
 	fakeZeek(t, "hexwall-test-no-such-if0")
 
 	var out bytes.Buffer
+
 	err := Setup(&out)
 	if err == nil {
 		t.Fatalf("Setup() error = nil, want an error for a missing interface\n%s", out.String())
 	}
+
 	if !strings.Contains(out.String(), `"hexwall-test-no-such-if0", which does not exist`) {
 		t.Fatalf("Setup() output doesn't name the missing interface:\n%s", out.String())
 	}
@@ -247,6 +273,7 @@ func TestSetupReportsMissingInterface(t *testing.T) {
 
 func TestZeekctlFromZeekConfig(t *testing.T) {
 	_, prefix := fakeZeek(t, anyInterface(t))
+
 	got, err := Zeekctl()
 	if err != nil || got != filepath.Join(prefix, "bin", "zeekctl") {
 		t.Fatalf("Zeekctl() = %q, %v; want %q", got, err, filepath.Join(prefix, "bin", "zeekctl"))

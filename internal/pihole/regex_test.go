@@ -7,17 +7,21 @@ import "testing"
 
 func newRegexTestChecker(t *testing.T, rules map[string]int) *Checker {
 	t.Helper()
+
 	gravDB, gravPath := openTestGravityDB(t)
 	for rule, listType := range rules {
 		insertDomain(t, gravDB, rule, listType)
 	}
+
 	_ = gravDB.Close()
 
 	checker := newTestChecker(t, gravPath)
 	t.Cleanup(func() { _ = checker.Close() })
+
 	if err := checker.RefreshRegexLists(); err != nil {
 		t.Fatalf("RefreshRegexLists() error = %v", err)
 	}
+
 	return checker
 }
 
@@ -51,6 +55,7 @@ func TestIsBlockedByPolicy_RegexDenylist(t *testing.T) {
 		if err != nil {
 			t.Fatalf("IsBlockedByPolicy(%q) error = %v", tt.domain, err)
 		}
+
 		if blocked != tt.want {
 			t.Errorf("IsBlockedByPolicy(%q) = %v, want %v", tt.domain, blocked, tt.want)
 		}
@@ -78,6 +83,7 @@ func TestIsAllowedByPolicy_RegexAllowlist(t *testing.T) {
 		if err != nil {
 			t.Fatalf("IsAllowedByPolicy(%q) error = %v", tt.domain, err)
 		}
+
 		if allowed != tt.want {
 			t.Errorf("IsAllowedByPolicy(%q) = %v, want %v", tt.domain, allowed, tt.want)
 		}
@@ -86,13 +92,16 @@ func TestIsAllowedByPolicy_RegexAllowlist(t *testing.T) {
 
 func TestRegexRule_Invert(t *testing.T) {
 	t.Parallel()
+
 	rule, err := parseRegexRule(`(^|\.)tracker\.example$;invert`, false)
 	if err != nil {
 		t.Fatalf("parseRegexRule() error = %v", err)
 	}
+
 	if !rule.matches("good.example") {
 		t.Error("inverted rule should match a domain the pattern does not")
 	}
+
 	if rule.matches("c2.tracker.example") {
 		t.Error("inverted rule should not match a domain the pattern does")
 	}
@@ -100,9 +109,11 @@ func TestRegexRule_Invert(t *testing.T) {
 
 func TestParseRegexRule_UnknownOption(t *testing.T) {
 	t.Parallel()
+
 	if _, err := parseRegexRule(`^x\.;future=1`, false); err == nil {
 		t.Error("deny rule with an unknown option should be skipped")
 	}
+
 	if _, err := parseRegexRule(`^x\.;future=1`, true); err != nil {
 		t.Errorf("allow rule with an unknown option should still apply, got %v", err)
 	}
@@ -115,6 +126,7 @@ func TestRefreshRegexLists_PicksUpNewRules(t *testing.T) {
 
 	checker := newTestChecker(t, gravPath)
 	t.Cleanup(func() { _ = checker.Close() })
+
 	if err := checker.RefreshRegexLists(); err != nil {
 		t.Fatalf("RefreshRegexLists() error = %v", err)
 	}
@@ -124,6 +136,7 @@ func TestRefreshRegexLists_PicksUpNewRules(t *testing.T) {
 	}
 
 	insertDomain(t, gravDB, `(^|\.)tracker\.example$`, 3)
+
 	if err := checker.RefreshRegexLists(); err != nil {
 		t.Fatalf("RefreshRegexLists() error = %v", err)
 	}
@@ -135,10 +148,12 @@ func TestRefreshRegexLists_PicksUpNewRules(t *testing.T) {
 
 func TestRefreshRegexLists_NilGravityDB(t *testing.T) {
 	t.Parallel()
+
 	checker := &Checker{}
 	if err := checker.RefreshRegexLists(); err != nil {
 		t.Fatalf("RefreshRegexLists() error = %v", err)
 	}
+
 	if checker.matchesRegex("anything.example", false) {
 		t.Fatal("no rules loaded, nothing should match")
 	}

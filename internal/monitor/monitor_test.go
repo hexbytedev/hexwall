@@ -355,6 +355,57 @@ func TestHandleZeekEventEnforceKillsLocalConnection(t *testing.T) {
 	}
 }
 
+// The allowlist exists to override gravity: allowlisting a domain a blocklist wrongly
+// caught is its main use. Pi-hole answers such a domain, and the scan spares it at rung 3;
+// a Zeek alert about it must not kill it either.
+func TestHandleZeekEventAllowlistedDomainNotKilled(t *testing.T) {
+	checker := newTestChecker(t, func(db *sql.DB) {
+		if _, err := db.Exec(`INSERT INTO gravity (domain) VALUES ('cdn.example.com')`); err != nil {
+			t.Fatal(err)
+		}
+		insertDomain(t, db, "cdn.example.com", 0) // allowlist
+	})
+	hexwallStore, dbPath := newTestStore(t)
+
+	local := connlist.Connection{LPort: "55881", RAddress: "203.0.113.20:443", RPort: "443", PID: "1", Program: "firefox"}
+	scanner := &Scanner{
+		Checker: checker, Store: hexwallStore, Mode: ModeEnforce,
+		ConnectionLister: func() ([]connlist.Connection, error) { return []connlist.Connection{local}, nil },
+	}
+	event := zeek.Event{SrcIP: "192.168.0.223", SrcPort: "55881", DstIP: "203.0.113.20", DstPort: "443", SNI: "cdn.example.com"}
+	scanner.HandleZeekEvent(event)
+
+	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections`); got != 0 {
+		t.Fatalf("killed_connections count = %d, want 0: the domain is allowlisted", got)
+	}
+	alert, err := hexwallStore.RecentZeekAlert(event.SrcIP, event.SNI)
+	if err != nil || alert == nil {
+		t.Fatalf("RecentZeekAlert() = %v, %v; want the alert recorded", alert, err)
+	}
+	if alert.Blocked {
+		t.Fatal("alert recorded as blocked; Pi-hole allows this domain")
+	}
+}
+
+// Rung 1 applies to Zeek alerts too: a connection to the local network is never killed.
+func TestHandleZeekEventLocalNetworkNotKilled(t *testing.T) {
+	checker := newTestChecker(t, func(db *sql.DB) {
+		insertDomain(t, db, "nas.example.com", 1) // denylist
+	})
+	hexwallStore, dbPath := newTestStore(t)
+
+	local := connlist.Connection{LPort: "55881", RAddress: "192.168.0.10:443", RPort: "443", PID: "1", Program: "curl"}
+	scanner := &Scanner{
+		Checker: checker, Store: hexwallStore, Mode: ModeEnforce,
+		ConnectionLister: func() ([]connlist.Connection, error) { return []connlist.Connection{local}, nil },
+	}
+	scanner.HandleZeekEvent(zeek.Event{SrcIP: "192.168.0.223", SrcPort: "55881", DstIP: "192.168.0.10", DstPort: "443", SNI: "nas.example.com"})
+
+	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections`); got != 0 {
+		t.Fatalf("killed_connections count = %d, want 0: the destination is on the local network", got)
+	}
+}
+
 // A connection that isn't in this machine's socket list belongs to another device (or has
 // closed). hexwall cannot close a socket on another machine, so it records and warns.
 func TestHandleZeekEventEnforceOtherDeviceNotKilled(t *testing.T) {

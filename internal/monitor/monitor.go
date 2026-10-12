@@ -104,7 +104,7 @@ func (s *Scanner) HandleZeekEvent(event zeek.Event) {
 	}
 
 	selectedMode := normalizeMode(s.Mode)
-	blocked, err := s.Checker.IsBlockedByPolicy(event.SNI)
+	blocked, err := s.alertBlockedByPolicy(event)
 	if err != nil {
 		slog.Warn("zeek policy lookup failed", "sni", event.SNI, "err", err)
 		return
@@ -142,6 +142,24 @@ func (s *Scanner) HandleZeekEvent(event zeek.Event) {
 			s.applyBlockedOutcome(ip.String(), conn)
 		}
 	}
+}
+
+// alertBlockedByPolicy applies the ladder's policy rungs to a Zeek alert, in Run's order:
+// rung 1 (local network), rung 3 (Pi-hole allowlist, which overrides gravity, as it does
+// in Pi-hole itself) and only then rung 4 (denylist, gravity, regex). An allowlist lookup
+// error is returned rather than read as "not allowed", so it can never lead to a kill.
+func (s *Scanner) alertBlockedByPolicy(event zeek.Event) (bool, error) {
+	if ip := net.ParseIP(event.DstIP); ip != nil && allowlist.Contains(ip) {
+		return false, nil
+	}
+	allowed, err := s.Checker.IsAllowedByPolicy(event.SNI)
+	if err != nil {
+		return false, fmt.Errorf("allowlist lookup: %w", err)
+	}
+	if allowed {
+		return false, nil
+	}
+	return s.Checker.IsBlockedByPolicy(event.SNI)
 }
 
 // findLocalConnection looks a Zeek notice's connection up in this machine's socket list.

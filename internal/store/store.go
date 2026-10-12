@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS killed_connections (
     ip        TEXT    NOT NULL,
     pid       TEXT    NOT NULL,
     program   TEXT    NOT NULL,
-    killed_at INTEGER NOT NULL
+    killed_at INTEGER NOT NULL,
+    outcome   TEXT    NOT NULL DEFAULT 'unknown'
 );
 
 CREATE TABLE IF NOT EXISTS fraud_checks (
@@ -249,6 +250,23 @@ func migrateSNITable(db *sql.DB) error {
 	return nil
 }
 
+// migrateKillOutcome adds the outcome column to a killed_connections table created before
+// it existed. Rows written before then are left as 'unknown': at the time, a refused or
+// failed kill was recorded the same way as a real one.
+func migrateKillOutcome(db *sql.DB) error {
+	var has int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('killed_connections') WHERE name = 'outcome'`).Scan(&has); err != nil {
+		return fmt.Errorf("query table info: %w", err)
+	}
+	if has > 0 {
+		return nil
+	}
+	if _, err := db.Exec(`ALTER TABLE killed_connections ADD COLUMN outcome TEXT NOT NULL DEFAULT 'unknown'`); err != nil {
+		return fmt.Errorf("add outcome column: %w", err)
+	}
+	return nil
+}
+
 // NewStore opens or creates the hexwall database at dbPath and applies the schema.
 func NewStore(dbPath string) (*Store, error) {
 	readWrite, err := sql.Open("sqlite", sqliteDSN(dbPath, "rwc"))
@@ -279,6 +297,11 @@ func NewStore(dbPath string) (*Store, error) {
 	if _, err := readWrite.Exec(schema); err != nil {
 		_ = readWrite.Close()
 		return nil, fmt.Errorf("failed to re-apply schema after migration: %w", err)
+	}
+
+	if err := migrateKillOutcome(readWrite); err != nil {
+		_ = readWrite.Close()
+		return nil, fmt.Errorf("failed to migrate killed_connections: %w", err)
 	}
 
 	if _, err := readWrite.Exec(backfillAllowedIPDomains); err != nil {
@@ -580,17 +603,44 @@ func (s *Store) UpsertDomainCheck(domain string, shouldBlock bool) error {
 	return nil
 }
 
-// LogKill records a killed connection in the audit log.
-func (s *Store) LogKill(ip, pid, program string) error {
-	_, err := s.readWrite.Exec(`
-		INSERT INTO killed_connections (ip, pid, program, killed_at)
-		VALUES (?, ?, ?, ?)
-	`, ip, pid, program, time.Now().Unix())
-
+// LogKill records a kill about to be attempted, with outcome KillAttempting, and returns
+// the row id for SetKillOutcome. Writing first keeps the record even if the kill never
+// returns; SetKillOutcome then says whether it happened.
+func (s *Store) LogKill(ip, pid, program string) (int64, error) {
+	result, err := s.readWrite.Exec(`
+		INSERT INTO killed_connections (ip, pid, program, killed_at, outcome)
+		VALUES (?, ?, ?, ?, ?)
+	`, ip, pid, program, time.Now().Unix(), KillAttempting)
 	if err != nil {
-		return fmt.Errorf("log kill %s: %w", ip, err)
+		return 0, fmt.Errorf("log kill %s: %w", ip, err)
 	}
 
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("log kill %s: read row id: %w", ip, err)
+	}
+	return id, nil
+}
+
+// KillOutcome is what happened to a kill recorded by LogKill.
+type KillOutcome string
+
+const (
+	// KillAttempting is written before the kill, so the row survives if hexwall dies mid-kill.
+	KillAttempting KillOutcome = "attempting"
+	// KillKilled means the connection, or its process, is gone.
+	KillKilled KillOutcome = "killed"
+	// KillRefused means a guardrail declined it on purpose (PID 1, hexwall itself, sshd...).
+	KillRefused KillOutcome = "refused"
+	// KillFailed means it couldn't be done: no usable PID, or the kill itself errored.
+	KillFailed KillOutcome = "failed"
+)
+
+// SetKillOutcome records how the kill logged as row id ended.
+func (s *Store) SetKillOutcome(id int64, outcome KillOutcome) error {
+	if _, err := s.readWrite.Exec(`UPDATE killed_connections SET outcome = ? WHERE id = ?`, outcome, id); err != nil {
+		return fmt.Errorf("set kill outcome %d: %w", id, err)
+	}
 	return nil
 }
 

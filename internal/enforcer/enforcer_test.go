@@ -1,6 +1,7 @@
 package enforcer
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -200,5 +201,20 @@ func TestIsProtectedMixedCaseAllEntries(t *testing.T) {
 		if !isProtected(mixed) {
 			t.Errorf("isProtected(%q) = false, want true for mixed-case spelling of protected program", mixed)
 		}
+	}
+}
+
+// Callers tell "declined on purpose" from "tried and failed" with errors.Is(err, ErrRefused).
+func TestGuardrailRefusalsWrapErrRefused(t *testing.T) {
+	for _, tc := range []struct {
+		pid     int
+		program string
+	}{{0, "curl"}, {1, "curl"}, {os.Getpid(), "hexwall"}, {4242, "sshd"}} {
+		if err := checkGuardrails(tc.pid, tc.program); !errors.Is(err, ErrRefused) {
+			t.Errorf("checkGuardrails(%d, %q) = %v, want an ErrRefused", tc.pid, tc.program, err)
+		}
+	}
+	if err := checkGuardrails(4242, "curl"); err != nil {
+		t.Errorf("checkGuardrails(4242, curl) = %v, want nil", err)
 	}
 }

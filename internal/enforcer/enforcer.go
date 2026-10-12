@@ -10,6 +10,7 @@
 package enforcer
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -48,27 +49,31 @@ func isProtected(name string) bool {
 	return protectedPrograms[lower]
 }
 
+// ErrRefused marks a kill the guardrails declined on purpose, as opposed to one that was
+// attempted and failed. Test for it with errors.Is.
+var ErrRefused = errors.New("kill refused by guardrail")
+
 // checkGuardrails applies the safety checks shared by both kill paths below,
-// before either one is attempted:
+// before either one is attempted. Every refusal wraps ErrRefused:
 //   - Refuses any PID <= 0.
 //   - Refuses PID 1 (init).
 //   - Refuses hexwall's own PID.
 //   - Refuses protected programs (case-insensitive match).
 func checkGuardrails(pid int, program string) error {
 	if pid <= 0 {
-		return fmt.Errorf("invalid PID %d", pid)
+		return fmt.Errorf("%w: invalid PID %d", ErrRefused, pid)
 	}
 
 	if pid == 1 {
-		return fmt.Errorf("refusing to signal init (PID 1)")
+		return fmt.Errorf("%w: refusing to signal init (PID 1)", ErrRefused)
 	}
 
 	if pid == os.Getpid() {
-		return fmt.Errorf("refusing to signal own process (PID %d)", pid)
+		return fmt.Errorf("%w: refusing to signal own process (PID %d)", ErrRefused, pid)
 	}
 
 	if isProtected(program) {
-		return fmt.Errorf("refusing to kill protected program %q (PID %d)", program, pid)
+		return fmt.Errorf("%w: refusing to kill protected program %q (PID %d)", ErrRefused, program, pid)
 	}
 
 	return nil

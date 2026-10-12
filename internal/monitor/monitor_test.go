@@ -468,13 +468,16 @@ func TestApplyBlockedOutcomeWatchModeNeverLogsKill(t *testing.T) {
 func TestApplyBlockedOutcomeEnforceModeLogsKillBeforeAttemptingIt(t *testing.T) {
 	hexwallStore, dbPath := newTestStore(t)
 
-	// PID 1 (init) is guaranteed to be refused by enforcer.KillProcess, but the
-	// audit row must still be written first ("audit survives the kill").
+	// PID 1 (init) is always refused by the guardrails. The audit row is still written
+	// first ("audit survives the kill"), but must then say the kill was refused, not done.
 	conn := connlist.Connection{PID: "1", Program: "curl", RAddress: "203.0.113.10:443"}
 	(&Scanner{Store: hexwallStore, Mode: ModeEnforce}).applyBlockedOutcome("203.0.113.10", conn)
 
-	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections WHERE ip = ?`, "203.0.113.10"); got != 1 {
-		t.Fatalf("killed_connections count = %d, want 1 even though the kill itself was refused", got)
+	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections WHERE ip = ? AND outcome = 'refused'`, "203.0.113.10"); got != 1 {
+		t.Fatalf("refused rows = %d, want 1: a refused kill must be recorded as refused", got)
+	}
+	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections WHERE outcome = 'killed'`); got != 0 {
+		t.Fatalf("killed rows = %d, want 0: nothing was killed", got)
 	}
 }
 
@@ -484,9 +487,9 @@ func TestApplyBlockedOutcomeInvalidPIDLogsWarningAndReturns(t *testing.T) {
 	conn := connlist.Connection{PID: "not-a-pid", Program: "curl", RAddress: "203.0.113.11:443"}
 	(&Scanner{Store: hexwallStore, Mode: ModeEnforce}).applyBlockedOutcome("203.0.113.11", conn)
 
-	// LogKill happens before ParsePID, so the audit row is still written.
-	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections WHERE ip = ?`, "203.0.113.11"); got != 1 {
-		t.Fatalf("killed_connections count = %d, want 1 (audit before parse failure)", got)
+	// LogKill happens before ParsePID, so the audit row exists, marked failed.
+	if got := queryInt(t, dbPath, `SELECT COUNT(*) FROM killed_connections WHERE ip = ? AND outcome = 'failed'`, "203.0.113.11"); got != 1 {
+		t.Fatalf("failed rows = %d, want 1 (audit before parse failure, then marked failed)", got)
 	}
 }
 

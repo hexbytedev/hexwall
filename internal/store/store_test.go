@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -1034,5 +1035,65 @@ func TestPruneRemovesStaleIPObservations(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("ip_observations count = %d, want 1 fresh row remaining", count)
+	}
+}
+
+// A database from before the outcome column existed must gain it on open, and its old
+// rows must say 'unknown': back then a refused kill was recorded like a real one.
+func TestNewStoreAddsKillOutcomeToOldDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "hexwall.db")
+	old, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`
+		CREATE TABLE killed_connections (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT NOT NULL, pid TEXT NOT NULL, program TEXT NOT NULL, killed_at INTEGER NOT NULL);
+		INSERT INTO killed_connections (ip, pid, program, killed_at) VALUES ('203.0.113.1', '1', 'curl', 1);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	_ = old.Close()
+
+	s, err := NewStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewStore() on an old database error = %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	var outcome string
+	if err := s.readWrite.QueryRow(`SELECT outcome FROM killed_connections WHERE ip = '203.0.113.1'`).Scan(&outcome); err != nil {
+		t.Fatalf("read old row: %v", err)
+	}
+	if outcome != "unknown" {
+		t.Fatalf("old row outcome = %q, want %q", outcome, "unknown")
+	}
+}
+
+func TestLogKillThenSetOutcome(t *testing.T) {
+	s, err := NewStore(filepath.Join(t.TempDir(), "hexwall.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	id, err := s.LogKill("203.0.113.2", "4242", "curl")
+	if err != nil || id == 0 {
+		t.Fatalf("LogKill() = %d, %v; want a row id", id, err)
+	}
+	read := func() string {
+		var outcome string
+		if err := s.readWrite.QueryRow(`SELECT outcome FROM killed_connections WHERE id = ?`, id).Scan(&outcome); err != nil {
+			t.Fatal(err)
+		}
+		return outcome
+	}
+	if got := read(); got != string(KillAttempting) {
+		t.Fatalf("outcome before the kill = %q, want %q", got, KillAttempting)
+	}
+	if err := s.SetKillOutcome(id, KillKilled); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got != string(KillKilled) {
+		t.Fatalf("outcome after SetKillOutcome = %q, want %q", got, KillKilled)
 	}
 }

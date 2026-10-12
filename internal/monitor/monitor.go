@@ -4,6 +4,7 @@ package monitor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -494,23 +495,44 @@ func (s *Scanner) applyBlockedOutcome(ipStr string, conn connlist.Connection) {
 		return
 	}
 
-	if err := s.Store.LogKill(ipStr, conn.PID, conn.Program); err != nil {
+	// The audit row is written before the attempt, so it exists even if the kill never
+	// returns, and then updated with what actually happened.
+	rowID, err := s.Store.LogKill(ipStr, conn.PID, conn.Program)
+	if err != nil {
 		slog.Error("failed to log kill", "address", conn.RAddress, "err", err)
+	}
+
+	record := func(outcome store.KillOutcome) {
+		if rowID == 0 {
+			return
+		}
+
+		if err := s.Store.SetKillOutcome(rowID, outcome); err != nil {
+			slog.Error("failed to record kill outcome", "address", conn.RAddress, "outcome", outcome, "err", err)
+		}
 	}
 
 	pidInt, err := enforcer.ParsePID(conn.PID)
 	if err != nil {
 		slog.Warn("invalid PID, skipping kill", "pid", conn.PID, "address", conn.RAddress, "err", err)
+		record(store.KillFailed)
 		return
 	}
 
 	// Prefers a connection-level kill (ss -K) so any other connection the same
 	// process holds is left untouched; falls back to killing the whole process
 	// when that isn't possible. See enforcer.KillConnection.
-	if err := enforcer.KillConnection(pidInt, conn.Program, conn.LPort, ipStr, conn.RPort); err != nil {
-		slog.Warn("failed to kill connection", "address", conn.RAddress, "pid", conn.PID, "err", err)
-	} else {
+	err = enforcer.KillConnection(pidInt, conn.Program, conn.LPort, ipStr, conn.RPort)
+	switch {
+	case err == nil:
 		slog.Info("killed connection", "address", conn.RAddress)
+		record(store.KillKilled)
+	case errors.Is(err, enforcer.ErrRefused):
+		slog.Warn("kill refused by guardrail", "address", conn.RAddress, "pid", conn.PID, "program", conn.Program, "err", err)
+		record(store.KillRefused)
+	default:
+		slog.Warn("failed to kill connection", "address", conn.RAddress, "pid", conn.PID, "err", err)
+		record(store.KillFailed)
 	}
 }
 

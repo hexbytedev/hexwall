@@ -403,3 +403,26 @@ func TestClientReadsNewFileAfterRotation(t *testing.T) {
 		t.Fatalf("Lookup() after rotation = %q, %v; want example.com", domain, ok)
 	}
 }
+
+// A read error while looking for the header must be reported, not look like "no header":
+// without a header, hexwall can't read any TSV line. A line longer than bufio.Scanner's
+// limit (64 KiB) is an easy way to make the read fail. Not parallel: it swaps the logger.
+func TestReadTSVHeaderReportsReadError(t *testing.T) {
+	var logs bytes.Buffer
+
+	previous := slog.Default()
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	path := filepath.Join(t.TempDir(), "ssl.log")
+	writeFile(t, path, "#"+strings.Repeat("x", 70*1024)+"\n")
+
+	if fields := readTSVHeader(path); fields != nil {
+		t.Fatalf("readTSVHeader() = %v, want nil", fields)
+	}
+
+	if !strings.Contains(logs.String(), "could not read the ssl.log header") {
+		t.Fatalf("no warning logged for the read error:\n%s", logs.String())
+	}
+}

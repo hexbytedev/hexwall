@@ -194,6 +194,13 @@ func readTSVHeader(logPath string) map[string]int {
 		}
 	}
 
+	// Stopping on an error looks the same as "no header" to the caller, and without a
+	// header no TSV line can be read: say so instead of failing silently.
+	if err := scanner.Err(); err != nil {
+		slog.Warn("zeek: could not read the ssl.log header; TLS server names can't be read until Zeek starts a new file",
+			"path", logPath, "err", err)
+	}
+
 	return nil
 }
 

@@ -1,6 +1,8 @@
 package zeek
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -331,5 +333,73 @@ func TestNilClientLookup(t *testing.T) {
 	var c *Client
 	if sni, ok := c.Lookup("40000", "203.0.113.1", "443"); ok || sni != "" {
 		t.Fatalf("nil Client.Lookup() = %q, %v; want \"\", false", sni, ok)
+	}
+}
+
+// Zeek creates ssl.log at the first TLS connection it sees, so it can be missing when
+// hexwall starts (a quiet server, right after boot) and between rotations. hexwall must
+// keep running, say "waiting" once, and read the file from its first line when it
+// appears. Not parallel: it swaps the default logger.
+func TestClientWaitsForMissingSSLLog(t *testing.T) {
+	var logs bytes.Buffer
+
+	previous := slog.Default()
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	path := filepath.Join(t.TempDir(), "ssl.log")
+
+	c, err := NewClient(&Config{LogPath: path})
+	if err != nil || c == nil {
+		t.Fatalf("NewClient() with no ssl.log yet = %v, %v; want a client that waits", c, err)
+	}
+
+	c.Close() // stop the 5 s ticker; the test drives each poll itself
+
+	for range 3 {
+		c.processNewLines()
+	}
+
+	if got := strings.Count(logs.String(), "waiting for ssl.log"); got != 1 {
+		t.Fatalf("logged 'waiting' %d times, want 1:\n%s", got, logs.String())
+	}
+
+	// The file appears: read from its first line, header included.
+	writeFile(t, path, realZeekTSVHeader+realZeekTSVDataLine)
+	c.processNewLines()
+
+	if got := strings.Count(logs.String(), "ssl.log found"); got != 1 {
+		t.Fatalf("logged 'found' %d times, want 1:\n%s", got, logs.String())
+	}
+
+	if domain, ok := c.Lookup("37526", "172.66.147.243", "443"); !ok || domain != "example.com" {
+		t.Fatalf("Lookup() = %q, %v; want example.com from the file that appeared", domain, ok)
+	}
+}
+
+// A rotation removes ssl.log and Zeek creates a new one later. The new file must be
+// read from the start, with its own header, even if it grows past the old offset before
+// the next poll.
+func TestClientReadsNewFileAfterRotation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ssl.log")
+	writeFile(t, path, realZeekTSVHeader+strings.Repeat("# padding so the old file is long\n", 20))
+
+	c := newTestClientTSV(t, path)
+	c.processNewLines()
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+
+	c.processNewLines() // sees the gap
+
+	// Longer than the old file: an offset kept from the old file would land past the
+	// data line and skip it.
+	writeFile(t, path, realZeekTSVHeader+realZeekTSVDataLine+strings.Repeat("# more traffic\n", 60))
+	c.processNewLines()
+
+	if domain, ok := c.Lookup("37526", "172.66.147.243", "443"); !ok || domain != "example.com" {
+		t.Fatalf("Lookup() after rotation = %q, %v; want example.com", domain, ok)
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"math"
 	"os"
@@ -164,16 +163,6 @@ type noticeTailer struct {
 	state         fileState // what was last reported about the file, so each change is logged once
 }
 
-// fileState is what the tailer last found at its path.
-type fileState int
-
-const (
-	fileUnchecked  fileState = iota
-	fileMissing              // Zeek writes notice.log at its first alert, so this is normal for a while
-	fileUnreadable           // exists but can't be opened, e.g. permissions
-	fileOpen
-)
-
 // skipExisting reads the file as it is now without sending anything: the parser still
 // learns the TSV "#fields" header at the top, but alerts already in the file are not
 // replayed. In enforce mode an old alert would otherwise trigger a kill on every restart.
@@ -191,15 +180,16 @@ func (t *noticeTailer) poll(events chan<- Event) {
 func (t *noticeTailer) read(events chan<- Event) {
 	file, err := os.Open(t.path)
 	if err != nil {
-		t.reportOpenError(err)
+		if noticeLog.reportOpenError(&t.state, t.path, err) {
+			t.offset = 0
+			t.parser = noticeParser{}
+		}
+
 		return
 	}
 	defer func() { _ = file.Close() }()
 
-	if t.state != fileOpen {
-		slog.Info("zeek: notice log found, watching for DNS-bypass alerts", "path", t.path)
-		t.state = fileOpen
-	}
+	noticeLog.reportOpened(&t.state, t.path)
 
 	fi, err := file.Stat()
 	if err != nil {
@@ -262,27 +252,6 @@ func (t *noticeTailer) read(events chan<- Event) {
 		default:
 			slog.Warn("zeek: DNS-bypass alert dropped, alert handler is behind", "sni", event.SNI, "dst_ip", event.DstIP)
 		}
-	}
-}
-
-// reportOpenError logs why notice.log can't be read, once per change of reason, so a
-// 2-second poll doesn't repeat it.
-func (t *noticeTailer) reportOpenError(err error) {
-	if errors.Is(err, fs.ErrNotExist) {
-		if t.state != fileMissing {
-			slog.Info("zeek: waiting for notice log; Zeek creates it at its first alert", "path", t.path)
-			t.state = fileMissing
-		}
-		// Whatever appears at this path next is a new file: read it from the start.
-		t.offset = 0
-		t.parser = noticeParser{}
-
-		return
-	}
-
-	if t.state != fileUnreadable {
-		slog.Warn("zeek: cannot open notice log; DNS-bypass alerts are not being read", "path", t.path, "err", err)
-		t.state = fileUnreadable
 	}
 }
 

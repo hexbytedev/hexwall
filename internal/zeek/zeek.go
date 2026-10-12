@@ -57,7 +57,8 @@ type Client struct {
 	tsvFields map[string]int
 
 	offset  int64
-	pending []byte // bytes read past the last newline; held until the rest of the line arrives
+	pending []byte    // bytes read past the last newline; held until the rest of the line arrives
+	state   fileState // what was last reported about the file, so each change is logged once
 	stopCh  chan struct{}
 	done    chan struct{}
 }
@@ -73,33 +74,39 @@ func NewClient(cfg *Config) (*Client, error) {
 
 	logPath := strings.TrimSpace(cfg.LogPath)
 
-	// Verify the file exists and is readable before starting the tailer.
-	f, err := os.Open(logPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open zeek ssl.log %s: %w", logPath, err)
-	}
-
-	fi, err := f.Stat()
-
-	_ = f.Close()
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat zeek ssl.log %s: %w", logPath, err)
-	}
-
 	c := &Client{
 		logPath: logPath,
 		cache:   make(map[string]sniEntry),
-		offset:  fi.Size(),
-		// The tailer starts reading from the current end of the file (above),
-		// which is always past the "#fields" header Zeek writes once, at the
-		// very top, when it first creates the log. Without this separate,
-		// from-the-start read, TSV parsing would never learn the column
-		// order in the normal case (Zeek already running before hexwall
-		// starts) and would silently never match anything.
-		tsvFields: readTSVHeader(logPath),
-		stopCh:    make(chan struct{}),
-		done:      make(chan struct{}),
+		stopCh:  make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+
+	// A missing ssl.log is normal (Zeek creates it at the first TLS connection) and
+	// must not stop hexwall: the scan runs by IP meanwhile, and the tailer reads the
+	// file from its first line once it appears. Any other error, such as no
+	// permission, won't fix itself, so it stops startup loudly.
+	f, err := os.Open(logPath)
+	if err != nil {
+		if !sslLog.reportOpenError(&c.state, logPath, err) {
+			return nil, fmt.Errorf("failed to open zeek ssl.log %s: %w", logPath, err)
+		}
+	} else {
+		fi, err := f.Stat()
+
+		_ = f.Close()
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to stat zeek ssl.log %s: %w", logPath, err)
+		}
+
+		// The tailer starts reading from the current end of the file, which is always
+		// past the "#fields" header Zeek writes once, at the very top, when it creates
+		// the log. Without this separate, from-the-start read, TSV parsing would never
+		// learn the column order in the normal case (Zeek already running before
+		// hexwall starts) and would silently never match anything.
+		c.offset = fi.Size()
+		c.tsvFields = readTSVHeader(logPath)
+		sslLog.reportOpened(&c.state, logPath)
 	}
 
 	go c.tailLoop(context.Background())
@@ -265,9 +272,18 @@ func (c *Client) tailLoop(ctx context.Context) {
 func (c *Client) processNewLines() {
 	file, err := os.Open(c.logPath)
 	if err != nil {
-		slog.Debug("zeek: cannot open ssl.log", "path", c.logPath, "err", err)
+		if sslLog.reportOpenError(&c.state, c.logPath, err) {
+			// Whatever appears here next is a new file, with its own "#fields" header
+			// at the top: read it from the start and learn that header again.
+			c.offset = 0
+			c.pending = nil
+			c.tsvFields = nil
+		}
+
 		return
 	}
+
+	sslLog.reportOpened(&c.state, c.logPath)
 
 	defer func() {
 		if err := file.Close(); err != nil {

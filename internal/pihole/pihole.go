@@ -33,8 +33,6 @@ type Checker struct {
 	regex atomic.Pointer[regexLists]
 }
 
-const domainLookback = time.Hour
-
 // NewChecker opens a read-only Checker for the configured Pi-hole database.
 func NewChecker(config *Config) (*Checker, error) {
 	if config == nil {
@@ -150,37 +148,6 @@ func (c *Checker) Close() error {
 	}
 
 	return errors.Join(errFTL, errGravity)
-}
-
-// IsDomainKnown reports whether domain appeared in Pi-hole query history within the last hour.
-// Domains missing from that history bypassed Pi-hole DNS resolution and are treated as suspicious.
-func (c *Checker) IsDomainKnown(domain string) (bool, error) {
-	domain = normalizeDomain(domain)
-	if domain == "" {
-		return false, nil
-	}
-
-	cutoff := time.Now().Add(-domainLookback).Unix()
-
-	var found int
-
-	err := c.db.QueryRow(`
-		SELECT 1
-		FROM queries
-		WHERE timestamp >= ?
-		  AND TRIM(domain) <> ''
-		  AND domain = ? COLLATE NOCASE
-		LIMIT 1
-	`, cutoff, domain).Scan(&found)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-
-	if err != nil {
-		return false, fmt.Errorf("database query failed: %w", err)
-	}
-
-	return true, nil
 }
 
 // IsAllowedByPolicy reports whether the domain is on Pi-hole's allowlist or matches an allow regex.

@@ -416,6 +416,17 @@ func (s *Scanner) Run(ctx context.Context) {
 			continue
 		}
 
+		// Unsure whether the user allowed this domain (a Pi-hole allow pattern couldn't be
+		// read): report, don't kill. Same rule as a rung-3 lookup error.
+		if !s.Checker.AllowListComplete() {
+			slog.Warn("deghost-blocked domain NOT killed: a Pi-hole allow pattern couldn't be read, so it may be allowed",
+				"domain", domain, "address", conn.RAddress, "pid", conn.PID, "program", conn.Program)
+
+			summary.unknown++
+
+			continue
+		}
+
 		slog.Warn("deghost-blocked domain", "domain", domain, "address", conn.RAddress, "pid", conn.PID, "program", conn.Program, "reason", reason)
 
 		s.applyBlockedOutcome(ipStr, conn)

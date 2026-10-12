@@ -171,6 +171,20 @@ func (c *Checker) regexPatterns(view string) ([]string, error) {
 	return patterns, nil
 }
 
+// AllowListComplete reports whether every Pi-hole regex allow rule could be applied.
+// When one couldn't (a pattern Go can't compile), IsAllowedByPolicy may answer "not
+// allowed" for a domain the user did allow, so checks hexwall adds on top of Pi-hole,
+// like reputation, must not kill on their own.
+func (c *Checker) AllowListComplete() bool {
+	if c == nil {
+		return true
+	}
+
+	lists := c.regex.Load()
+
+	return lists == nil || len(lists.allow) == len(lists.allowRaw)
+}
+
 // matchesRegex reports whether domain matches any loaded allow (or deny) regex rule.
 func (c *Checker) matchesRegex(domain string, allow bool) bool {
 	lists := c.regex.Load()

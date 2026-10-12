@@ -203,3 +203,27 @@ func TestRunWithoutSNIUsesIPOnlyPath(t *testing.T) {
 		t.Fatalf("ip_observations rows = %d, want 1: the IP-only path must have run", got)
 	}
 }
+
+// Item 8: an allow pattern Go can't compile might have allowed this domain, so a
+// reputation verdict alone must not kill it. `(a)\1` (a back-reference) is valid in
+// Pi-hole's regex flavour but not in Go's.
+func TestRunDeghostBlockNotKilledWhenAllowPatternUnreadable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"allowed","blacklisted":true}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	checker := newTestChecker(t, func(db *sql.DB) { insertDomain(t, db, `(a)\1`, 2) })
+	if checker.AllowListComplete() {
+		t.Fatal("AllowListComplete() = true, want false with an unreadable allow pattern")
+	}
+
+	hexwallStore, dbPath := newTestStore(t)
+	scanner := &Scanner{Checker: checker, Store: hexwallStore, DeghostClient: deghost.NewClient(srv.URL, time.Second), DeghostDomain: true}
+
+	ladderScan(t, scanner, "bad.example.com")
+
+	if got := killRows(t, dbPath); got != 0 {
+		t.Fatalf("kill rows = %d, want 0: the user may have allowed this domain", got)
+	}
+}

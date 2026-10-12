@@ -49,8 +49,8 @@ type IPCache struct {
 // NewIPCache creates an IPCache backed by the given Checker and Store.
 func NewIPCache(checker *Checker, store *store.Store) *IPCache {
 	return &IPCache{
-		checker:          checker,
-		store:            store,
+		checker:              checker,
+		store:                store,
 		answeredQueriesAfter: checker.AnsweredQueriesAfter,
 		maxQueryID:           checker.MaxQueryID,
 		lookupHost:           net.DefaultResolver.LookupHost,

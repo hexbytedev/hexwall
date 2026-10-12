@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -159,6 +160,13 @@ func run() int {
 	}
 	slog.Info("detected OS", "os", runtime.GOOS)
 
+	if fatal, msg := privilegeCheck(cfg.mode, os.Geteuid()); fatal {
+		slog.Error(msg)
+		return 1
+	} else if msg != "" {
+		slog.Warn(msg)
+	}
+
 	// Cancel background work cleanly on Ctrl+C.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -216,6 +224,9 @@ func run() int {
 	hexwallStore, err := store.NewStore(cfg.hexwallDBPath)
 	if err != nil {
 		slog.Error("failed to open hexwall database", "path", cfg.hexwallDBPath, "err", err)
+		if strings.Contains(err.Error(), "readonly database") || errors.Is(err, fs.ErrPermission) {
+			slog.Error("the database file belongs to another user (often root, from an earlier sudo run): run with sudo, or pick another --hexwall-db")
+		}
 		return 1
 	}
 	defer func() {
@@ -429,4 +440,18 @@ Kept on purpose:
                      (delete it with: sudo rm -r /var/lib/hexwall)
   this binary        delete it yourself if you installed it (e.g. /usr/local/bin/hexwall)`)
 	return nil
+}
+
+// privilegeCheck says what running as euid means for mode. Without root, ss can't name
+// other users' programs, ss -K can't close sockets (it needs CAP_NET_ADMIN), and other
+// users' processes can't be signalled. Enforce mode would then report kills it can't
+// make, so it refuses to start; watch mode still sees connections and only warns.
+func privilegeCheck(mode string, euid int) (fatal bool, msg string) {
+	if euid == 0 {
+		return false, ""
+	}
+	if mode == monitor.ModeEnforce {
+		return true, "enforce mode needs root: without it hexwall can't close connections or stop other users' programs (run with sudo)"
+	}
+	return false, "not running as root: other users' programs show without a name, and Zeek's logs may be unreadable (run with sudo for the full picture)"
 }

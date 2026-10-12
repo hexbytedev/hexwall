@@ -265,12 +265,15 @@ func TestShouldBlockDomainNilReport(t *testing.T) {
 	}
 }
 
-func TestShouldBlockDomainNotAllowed(t *testing.T) {
+// "not_allowed" is the API's verdict on a domain as an email domain. This is its real
+// answer for api.github.com (2026-10-12): no MX record, so "not_allowed". Killing on it
+// would kill GitHub's API.
+func TestShouldBlockDomainNotAllowedDoesNotBlock(t *testing.T) {
 	t.Parallel()
 
-	report := &DomainReport{Status: "not_allowed"}
-	if !ShouldBlockDomain(report) {
-		t.Error("ShouldBlockDomain(not_allowed) = false, want true")
+	report := &DomainReport{Status: "not_allowed", HasMX: false, Blacklisted: false}
+	if ShouldBlockDomain(report) {
+		t.Error("ShouldBlockDomain(not_allowed, no MX) = true, want false: that's an email check, not a threat verdict")
 	}
 }
 

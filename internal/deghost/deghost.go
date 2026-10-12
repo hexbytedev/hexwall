@@ -188,13 +188,17 @@ func (c *Client) CheckDomain(ctx context.Context, domain string) (*DomainReport,
 }
 
 // ShouldBlockDomain reports whether the domain report matches the current block policy.
-// It triggers only on explicit negative signals (status "not_allowed" or blacklisted),
-// ignoring softer signals like disposable, spam, or domain age which are too noisy
-// to act on alone — consistent with how ShouldKill only fires on explicit threat fields.
+// Only an explicit blacklist entry counts, consistent with how ShouldKill only fires on
+// explicit threat fields.
+//
+// Status is not used: it judges a domain as an email domain. "not_allowed" comes back
+// for any domain that can't receive mail (no MX record), which covers most API and CDN
+// hosts (api.github.com, cdn.jsdelivr.net), while an ad tracker with MX records is
+// "allowed". Softer signals (disposable, spam, domain age) are too noisy to act on.
 func ShouldBlockDomain(report *DomainReport) bool {
 	if report == nil {
 		return false
 	}
 
-	return report.Status == "not_allowed" || report.Blacklisted
+	return report.Blacklisted
 }
